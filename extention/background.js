@@ -278,7 +278,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
     if (message && message.track && message.artist) {
       const activity = {
-        details: `**${message.track}**`,
+        details: `${message.track}`,
         state: `${message.artist}`,
         startTimestamp: message.startTimestamp || Math.floor(Date.now() / 1000),
         
