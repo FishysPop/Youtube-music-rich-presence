@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YT Music RPC Status</title>
+  <style>
+    :root {
+      --bg: #181a20;
+      --panel: #23262f;
+      --accent: #7289da;
+      --text: #f5f6fa;
+      --text-muted: #b9bbbe;
+      --border: #282b36;
+      --success: #43b581;
+      --error: #f04747;
+      --pending: #faa61a;
+    }
+    body {
+      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      width: 250px;
+      padding: 10px 8px 8px 8px;
+      font-size: 13px;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px 0 #0008;
+      margin: 0;
+      overflow-y: auto; /* Consider 'scroll' if content height changes cause flicker */
+      scrollbar-gutter: stable;
+      min-height: 320px; /* Or a height that fits your content comfortably */
+      max-height: 400px;
+    }
+    h3 {
+      margin-top: 0;
+      margin-bottom: 14px;
+      font-size: 1.1em;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      color: var(--accent);
+      text-align: center;
+    }
+    .status-section {
+      background: var(--panel);
+      border-radius: 10px;
+      margin-bottom: 10px;
+      padding: 10px 10px 8px 10px;
+      border: 1px solid var(--border);
+      box-shadow: 0 1px 4px 0 #0003;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      transition: background 0.2s;
+    }
+    .status-section:last-child {
+      margin-bottom: 0;
+    }
+    .status-label {
+      font-weight: 600;
+      color: var(--text-muted);
+      font-size: 0.95em;
+      margin-bottom: 1px;
+    }
+    .status-value {
+      margin-left: 0;
+      font-size: 1em;
+      font-weight: 500;
+      letter-spacing: 0.1px;
+      border-radius: 6px;
+      padding: 2px 7px;
+      display: inline-block; /* Or block if you want it on its own line always */
+      background: #23262f; /* Default background for status-value */
+      transition: color 0.2s, background 0.2s;
+      min-height: 1.2em; /* Helps stabilize height if text content changes */
+    }
+    .status-value.connected {
+      color: var(--success);
+      background: #232f23;
+    }
+    .status-value.disconnected {
+      color: var(--error);
+      background: #2f2323;
+    }
+    .status-value.pending {
+      color: var(--pending);
+      background: #2f2a23;
+    }
+    .song-info {
+      margin-top: 2px;
+      font-style: italic;
+      color: var(--text-muted);
+      font-size: 0.95em;
+      word-break: break-word;
+      min-height: 1.1em; /* Helps stabilize height, adjust as needed */
+    }
+    /* Specific min-height for current song to accommodate 1-2 lines */
+    #currentSong {
+        min-height: 2.2em; /* Adjust based on your font size and line height for 2 lines */
+    }
+    .button-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      margin-bottom: 0;
+    }
+   button {
+      flex: 1 1 0;
+      padding: 5px 8px;
+      
+      border: none;
+      border-radius: 8px; 
+      background: var(--accent);
+      color: #fff;
+
+      font-size: 0.9em; 
+      
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 8px 0 #0002;
+      transition: background 0.18s, box-shadow 0.18s;
+      outline: none;
+      letter-spacing: 0.2px;
+    }
+
+    button:last-child {
+      background: #23262f; 
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+    button:hover, button:focus {
+      background: #5b6eae;
+      box-shadow: 0 4px 16px 0 #0003;
+    }
+    button:last-child:hover, button:last-child:focus {
+      background: #232f4a;
+      color: #aeb8e6;
+    }
+    @media (max-width: 260px) {
+      body { width: 98vw; padding: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <h3>YouTube Music Rich Presence</h3>
+
+  <div class="status-section">
+    <span class="status-label">Native Host:</span>
+    <span id="nativeHostStatus" class="status-value">Checking...</span>
+  </div>
+
+  <div class="status-section">
+    <span class="status-label">Discord RPC:</span>
+    <span id="rpcStatus" class="status-value">Checking...</span>
+    <div id="rpcUser" class="song-info" style="font-size: 0.95em;">&nbsp;</div> <!-- Added &nbsp; for initial height -->
+  </div>
+
+  <div class="status-section">
+    <span class="status-label">Current Song:</span>
+    <div id="currentSong" class="song-info">Waiting for music...</div>
+  </div>
+
+<div class="button-row">
+  <button id="reconnectButton">Reconnect</button>
+  <button id="openOptionsButton">Options</button>
+</div>
+
+<div id="optionsPanel" style="display:none; background:#181a20; color:#faa61a; border:1px solid #faa61a; border-radius:8px; margin-top:10px; padding:10px; max-height:180px; overflow:auto; font-size:0.95em;">
+  <div style="font-weight:bold; margin-bottom:6px; color:#faa61a;">Options</div>
+  <div style="margin-bottom:8px; color:#faa61a; font-weight:bold;">Error Log</div>
+  <pre id="logContent" style="white-space:pre-wrap;word-break:break-all;margin:0; color:#faa61a; background:#23262f; border-radius:6px; padding:6px; max-height:70px; overflow:auto;"></pre>
+  <button id="hideOptionsButton" style="margin-top:10px;float:right;background:#23262f;color:#faa61a;border:1px solid #faa61a;">Close</button>
+</div>
+<div id="logPanel" style="display:none; background:#181a20; color:#faa61a; border:1px solid #faa61a; border-radius:8px; margin-top:10px; padding:8px; max-height:120px; overflow:auto; font-size:0.92em;">
+  <div style="font-weight:bold; margin-bottom:4px;">Error Log</div>
+  <pre id="logContent" style="white-space:pre-wrap;word-break:break-all;margin:0;"></pre>
+  <button id="hideLogsButton" style="margin-top:6px;float:right;background:#23262f;color:#faa61a;border:1px solid #faa61a;">Close</button>
+</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

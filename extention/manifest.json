@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Music Rich Presence",
+  "version": "1.2",
+  "description": "Displays your current YouTube Music activity on Discord via a native helper application.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://music.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "YT Music RPC Status"
+  }
+}

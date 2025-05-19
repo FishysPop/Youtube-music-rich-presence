@@ -1,0 +1,9 @@
+{
+  "name": "com.fishypop.ytmusic_rpc", 
+  "description": "YouTube Music Rich Presence Host",
+  "path": "C:\\path\\to\\your\\packaged\\native-host-executable.exe", 
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://annmchgfdlioinmhdjenpegklcdigblg/" 
+  ]
+}

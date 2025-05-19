@@ -1,0 +1,15 @@
+{
+    "scripts": {
+        "script": "node src/localnodescript",
+        "ws": "node src/localwebsocket",
+        "dev": "nodemon src/localnodescript"
+    },
+    "dependencies": {
+        "fixed-discord-rpc": "^4.0.2"
+    },
+    "devDependencies": {
+        "fs-extra": "^11.3.0",
+        "webpack": "^5.99.8",
+        "webpack-cli": "^6.0.1"
+    }
+}
