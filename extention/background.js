@@ -1,4 +1,3 @@
-// c:\Projects\Youtube music rich presence\extention\background.js
 const nativeHostName = 'com.fishypop.ytmusic_rpc';
 
 let port = null;
@@ -21,20 +20,16 @@ let pendingActivity = null; // Activity data waiting to be sent when RPC is read
  *                                                      as 'currentActivity' for THIS specific status update, overriding the global currentActivity.
  */
 function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, overridePopupActivity = undefined) {
-    // console.log(`Background: updateStatus called. New Status: ${newStatus}, Error: ${errorMessage}, User: ${rpcUser ? rpcUser.username : 'none'}, Override Popup Activity: ${overridePopupActivity !== undefined ? (overridePopupActivity ? overridePopupActivity.details : 'null') : 'not overridden'}`);
 
     currentStatus = newStatus;
 
-    if (errorMessage !== undefined) { // Explicitly passed (null or string)
+    if (errorMessage !== undefined) {
         statusErrorMessage = errorMessage;
     }
-    if (rpcUser !== undefined) { // Explicitly passed (null or object)
+    if (rpcUser !== undefined) {
         currentRpcUser = rpcUser;
     }
-    // DO NOT modify global currentActivity here based on overridePopupActivity.
-    // global currentActivity is updated by processNewActivity or native host responses.
 
-    // If status implies success, clear error message if not explicitly set
     if ((newStatus === 'rpc_ready' || newStatus === 'native_connected') && errorMessage === undefined) {
         statusErrorMessage = null;
     }
@@ -42,8 +37,7 @@ function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, 
         // console.warn("Background: updateStatus to rpc_ready without rpcUser, but currentRpcUser is null.")
     }
 
-    // Determine what activity to show in the popup for THIS update
-    // If overridePopupActivity is explicitly passed (even if null), use it. Otherwise, use the global currentActivity.
+
     const activityForThisPopupUpdate = overridePopupActivity !== undefined ? overridePopupActivity : currentActivity;
 
     chrome.runtime.sendMessage({
@@ -54,7 +48,6 @@ function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, 
         currentActivity: activityForThisPopupUpdate
     }).catch(err => {
         if (!err.message.includes("Receiving end does not exist")) {
-            // console.warn('Background: Error sending status update to popup:', err.message);
         }
     });
 }
@@ -161,7 +154,6 @@ function connectToNativeHost() {
     }
 
     port.onMessage.addListener((message) => {
-        // console.log("Background: Received message from native host:", message);
         if (message.type === 'NATIVE_HOST_STARTED') {
             console.log('Background: Native host confirmed it has started. Waiting for RPC status.');
             updateStatus('native_connected', null, null, pendingActivity || currentActivity);
@@ -169,7 +161,6 @@ function connectToNativeHost() {
             if (message.status === 'connected') {
                 console.log('Background: Native host reported Discord RPC is ready (connected). User:', message.user);
                 isRpcReady = true;
-                // When RPC connects, send pendingActivity. Popup should reflect this pending activity.
                 updateStatus('rpc_ready', undefined, message.user, pendingActivity || currentActivity);
                 if (pendingActivity) {
                     console.log('Background: RPC ready, sending pending activity:', pendingActivity);
@@ -191,7 +182,6 @@ function connectToNativeHost() {
             console.log('Background: Received ACTIVITY_STATUS:', message);
             switch (message.status) {
                 case 'success':
-                    // Native host confirmed an activity was set. This is the new authoritative currentActivity.
                     currentActivity = message.activity;
                     if (pendingActivity &&
                         message.activity &&
@@ -200,13 +190,12 @@ function connectToNativeHost() {
                         pendingActivity.startTimestamp === message.activity.startTimestamp) {
                         pendingActivity = null;
                     }
-                    // Popup should see the activity that was just confirmed by the native host.
                     updateStatus('rpc_ready', undefined, currentRpcUser, currentActivity);
                     break;
                 case 'cleared':
                     currentActivity = null;
                     pendingActivity = null;
-                    updateStatus('rpc_ready', undefined, currentRpcUser, null); // Override popup to show cleared
+                    updateStatus('rpc_ready', undefined, currentRpcUser, null); 
                     break;
                 case 'error_rpc_not_ready':
                     isRpcReady = false;
@@ -252,12 +241,9 @@ function connectToNativeHost() {
 }
 
 function processNewActivity(activityData) {
-  // console.log("Background: processNewActivity called with:", activityData, "Current isRpcReady:", isRpcReady);
   currentActivity = activityData; // New song from content script becomes the current one
   pendingActivity = activityData; // This is the new desired state to send to native host
 
-  // Update UI to reflect new song, even if RPC isn't ready yet.
-  // Pass pendingActivity as the overridePopupActivity, so popup shows the latest intended state.
   updateStatus(currentStatus, statusErrorMessage, currentRpcUser, pendingActivity);
 
   if (isRpcReady && port) {
@@ -272,11 +258,9 @@ function processNewActivity(activityData) {
 }
 
 function processClearActivity() {
-  // console.log("Background: processClearActivity. Current isRpcReady:", isRpcReady);
   currentActivity = null; // No track is playing
   pendingActivity = null; // Clear any pending song activity; intent is to clear on Discord
 
-  // Update UI to reflect no song. Pass null to overridePopupActivity.
   updateStatus(currentStatus, statusErrorMessage, currentRpcUser, null);
 
   if (isRpcReady && port) {
@@ -291,55 +275,37 @@ function processClearActivity() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // --- DIAGNOSTIC LOG 1 ---
-  // console.log("Background: Received message in onMessage listener. Message:", JSON.stringify(message), "Sender Tab URL:", sender.tab ? sender.tab.url : "N/A", "Sender ID:", sender.id);
-
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
-    // --- DIAGNOSTIC LOG 2 ---
-    // console.log("Background: Message IS from a YouTube Music tab.");
-
-    if (message && message.track && message.artist) { // Message contains track, artist (and potentially albumArtUrl)
-      // --- DIAGNOSTIC LOG 3 ---
-      // console.log("Background: Message contains track and artist. Processing new activity. Album Art URL:", message.albumArtUrl);
+    if (message && message.track && message.artist) {
       const activity = {
-        details: message.track,
-        state: `by ${message.artist}`,
+        details: `**${message.track}**`,
+        state: `${message.artist}`,
         startTimestamp: message.startTimestamp || Math.floor(Date.now() / 1000),
         
-        // Default large image (fallback for native host)
-        largeImageKey: 'message.albumArtUrl', 
-        largeImageText: 'YouTube Music', // Default text
+        largeImageKey: message.albumArtUrl || null, 
+        largeImageText: 'YouTube Music',
 
-        smallImageKey: 'play', // Or 'pause' based on actual state if you implement that
+        smallImageKey: 'play', 
         smallImageText: 'Playing',
 
-        // Add the albumArtUrl to the activity payload for the native host
-        // It will be null if content.js didn't find one.
         albumArtUrl: message.albumArtUrl || null 
       };
 
-      // If an album art URL is available, we can suggest a more specific largeImageText.
-      // The native host will ultimately decide which image and text to use.
       if (message.albumArtUrl) {
-        activity.largeImageText = `${message.track} - Album Art`; 
+        activity.largeImageText = `${message.track} - ${message.artist}`; 
       }
       
       processNewActivity(activity);
       if (sendResponse) sendResponse({ status: "Activity info processed by background" });
-      return false; // Synchronous response
+      return false; 
     } else if (message && message.type === 'NO_TRACK') {
-        // --- DIAGNOSTIC LOG 4 ---
-        // console.log("Background: Message is NO_TRACK. Processing clear activity.");
         processClearActivity();
         if (sendResponse) sendResponse({ status: "No track detected, clear processed by background" });
-        return false; // Synchronous response
+        return false; 
     } else {
-        // --- DIAGNOSTIC LOG 5 ---
         // console.warn("Background: Message from YouTube Music tab, but not recognized track/artist or NO_TRACK. Message:", JSON.stringify(message));
     }
   } else if (message && message.type === 'GET_STATUS') { 
-      // --- DIAGNOSTIC LOG 6 ---
-      // console.log("Background: Message is GET_STATUS.");
       const activityForPopup = pendingActivity || currentActivity || null;
       if (sendResponse) {
           sendResponse({
@@ -350,10 +316,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               currentActivity: activityForPopup
           });
       }
-      return true; // Asynchronous response
+      return true; 
   } else if (message && message.type === 'RECONNECT_NATIVE_HOST') { 
-      // --- DIAGNOSTIC LOG 7 ---
-      // console.log("Background: Message is RECONNECT_NATIVE_HOST.");
+
       if (port) {
           try {
             port.onDisconnect.removeListener(onPortDisconnectHandler);
@@ -372,14 +337,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sendResponse) sendResponse({ status: "Attempting to reconnect native host" });
       return true; 
   } else if (message && message.type === 'OPEN_OPTIONS_PAGE') { 
-      // --- DIAGNOSTIC LOG 8 ---
-      // console.log("Background: Message is OPEN_OPTIONS_PAGE.");
       chrome.runtime.openOptionsPage();
       if (sendResponse) sendResponse({ status: "Options page open request sent" });
       return true; 
   } else {
-    // --- DIAGNOSTIC LOG 9 ---
-    // console.warn("Background: Message not from YouTube Music tab or not a recognized type. Sender Tab URL:", sender.tab ? sender.tab.url : "N/A", "Message Type:", message ? message.type : "N/A", "Full Message:", JSON.stringify(message));
   }
   return false;
 });
@@ -398,6 +359,5 @@ chrome.runtime.onStartup.addListener(() => {
   connectToNativeHost();
 });
 
-// Initial connection attempt when the background script loads
 connectToNativeHost();
 console.log('Background: YouTube Music Rich Presence background script initialized.');
