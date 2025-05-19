@@ -3,6 +3,12 @@
   "name": "YouTube Music Rich Presence",
   "version": "1.2",
   "description": "Displays your current YouTube Music activity on Discord via a native helper application.",
+  "icons": {
+    "16": "icon.png",
+    "32": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
   "permissions": [
     "activeTab",
     "scripting",

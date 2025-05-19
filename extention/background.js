@@ -1,3 +1,4 @@
+// c:\Projects\Youtube music rich presence\extention\background.js
 const nativeHostName = 'com.fishypop.ytmusic_rpc';
 
 let port = null;
@@ -291,40 +292,54 @@ function processClearActivity() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // --- DIAGNOSTIC LOG 1 ---
-  console.log("Background: Received message in onMessage listener. Message:", JSON.stringify(message), "Sender Tab URL:", sender.tab ? sender.tab.url : "N/A", "Sender ID:", sender.id);
+  // console.log("Background: Received message in onMessage listener. Message:", JSON.stringify(message), "Sender Tab URL:", sender.tab ? sender.tab.url : "N/A", "Sender ID:", sender.id);
 
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
     // --- DIAGNOSTIC LOG 2 ---
-    console.log("Background: Message IS from a YouTube Music tab.");
+    // console.log("Background: Message IS from a YouTube Music tab.");
 
-    if (message && message.track && message.artist) { // Added 'message &&' for safety
+    if (message && message.track && message.artist) { // Message contains track, artist (and potentially albumArtUrl)
       // --- DIAGNOSTIC LOG 3 ---
-      console.log("Background: Message contains track and artist. Processing new activity.");
+      // console.log("Background: Message contains track and artist. Processing new activity. Album Art URL:", message.albumArtUrl);
       const activity = {
         details: message.track,
         state: `by ${message.artist}`,
         startTimestamp: message.startTimestamp || Math.floor(Date.now() / 1000),
-        largeImageKey: 'ytm_logo_new',
-        largeImageText: 'YouTube Music',
-        smallImageKey: 'play',
+        
+        // Default large image (fallback for native host)
+        largeImageKey: 'message.albumArtUrl', 
+        largeImageText: 'YouTube Music', // Default text
+
+        smallImageKey: 'play', // Or 'pause' based on actual state if you implement that
         smallImageText: 'Playing',
+
+        // Add the albumArtUrl to the activity payload for the native host
+        // It will be null if content.js didn't find one.
+        albumArtUrl: message.albumArtUrl || null 
       };
+
+      // If an album art URL is available, we can suggest a more specific largeImageText.
+      // The native host will ultimately decide which image and text to use.
+      if (message.albumArtUrl) {
+        activity.largeImageText = `${message.track} - Album Art`; 
+      }
+      
       processNewActivity(activity);
       if (sendResponse) sendResponse({ status: "Activity info processed by background" });
       return false; // Synchronous response
-    } else if (message && message.type === 'NO_TRACK') { // Added 'message &&' for safety
+    } else if (message && message.type === 'NO_TRACK') {
         // --- DIAGNOSTIC LOG 4 ---
-        console.log("Background: Message is NO_TRACK. Processing clear activity.");
+        // console.log("Background: Message is NO_TRACK. Processing clear activity.");
         processClearActivity();
         if (sendResponse) sendResponse({ status: "No track detected, clear processed by background" });
         return false; // Synchronous response
     } else {
         // --- DIAGNOSTIC LOG 5 ---
-        console.warn("Background: Message from YouTube Music tab, but not recognized track/artist or NO_TRACK. Message:", JSON.stringify(message));
+        // console.warn("Background: Message from YouTube Music tab, but not recognized track/artist or NO_TRACK. Message:", JSON.stringify(message));
     }
-  } else if (message && message.type === 'GET_STATUS') { // Added 'message &&' for safety
+  } else if (message && message.type === 'GET_STATUS') { 
       // --- DIAGNOSTIC LOG 6 ---
-      console.log("Background: Message is GET_STATUS.");
+      // console.log("Background: Message is GET_STATUS.");
       const activityForPopup = pendingActivity || currentActivity || null;
       if (sendResponse) {
           sendResponse({
@@ -336,9 +351,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
       }
       return true; // Asynchronous response
-  } else if (message && message.type === 'RECONNECT_NATIVE_HOST') { // Added 'message &&' for safety
+  } else if (message && message.type === 'RECONNECT_NATIVE_HOST') { 
       // --- DIAGNOSTIC LOG 7 ---
-      console.log("Background: Message is RECONNECT_NATIVE_HOST.");
+      // console.log("Background: Message is RECONNECT_NATIVE_HOST.");
       if (port) {
           try {
             port.onDisconnect.removeListener(onPortDisconnectHandler);
@@ -351,23 +366,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           connectRetryTimeout = null;
       }
       isRpcReady = false;
-      pendingActivity = currentActivity; // Preserve current activity as pending
+      pendingActivity = currentActivity; 
       updateStatus('disconnected', 'Manual reconnect requested.', null, pendingActivity);
       connectToNativeHost();
       if (sendResponse) sendResponse({ status: "Attempting to reconnect native host" });
-      return true; // Asynchronous response
-  } else if (message && message.type === 'OPEN_OPTIONS_PAGE') { // Added 'message &&' for safety
+      return true; 
+  } else if (message && message.type === 'OPEN_OPTIONS_PAGE') { 
       // --- DIAGNOSTIC LOG 8 ---
-      console.log("Background: Message is OPEN_OPTIONS_PAGE.");
+      // console.log("Background: Message is OPEN_OPTIONS_PAGE.");
       chrome.runtime.openOptionsPage();
       if (sendResponse) sendResponse({ status: "Options page open request sent" });
-      return true; // Asynchronous response
+      return true; 
   } else {
     // --- DIAGNOSTIC LOG 9 ---
-    console.warn("Background: Message not from YouTube Music tab or not a recognized type. Sender Tab URL:", sender.tab ? sender.tab.url : "N/A", "Message Type:", message ? message.type : "N/A", "Full Message:", JSON.stringify(message));
+    // console.warn("Background: Message not from YouTube Music tab or not a recognized type. Sender Tab URL:", sender.tab ? sender.tab.url : "N/A", "Message Type:", message ? message.type : "N/A", "Full Message:", JSON.stringify(message));
   }
-  // Default return false if not handled by an async case or if sendResponse wasn't used.
-  // If sendResponse was called synchronously above, this return false is fine.
   return false;
 });
 
