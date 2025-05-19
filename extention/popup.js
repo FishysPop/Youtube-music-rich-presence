@@ -32,14 +32,12 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
 }
 }
 );
-  // Get the UI elements from popup.html
   const nativeHostStatusElement = document.getElementById("nativeHostStatus");
   const rpcStatusElement = document.getElementById("rpcStatus");
   const rpcUserElement = document.getElementById("rpcUser");
   const currentSongElement = document.getElementById("currentSong");
   const reconnectButton = document.getElementById("reconnectButton");
 
-  // Function to update the popup UI based on status and data from background
   function updatePopupUI(
     status,
     errorMessage = null,
@@ -57,9 +55,8 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
     let nativeHostStatusClass = "status-unknown";
     let rpcStatusClass = "status-unknown";
     let songInfoText = "Waiting for music...";
-    let rpcUserText = "\u00A0"; // Non-breaking space to maintain height
+    let rpcUserText = "\u00A0"; 
 
-    // Map the single background status to the two UI status elements
     switch (status) {
       case "disconnected":
         nativeHostStatusText = "Disconnected";
@@ -69,19 +66,19 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         break;
       case "connecting_native":
         nativeHostStatusText = "Connecting...";
-        rpcStatusText = "Disconnected"; // RPC is not connected yet
+        rpcStatusText = "Disconnected"; 
         nativeHostStatusClass = "pending";
         rpcStatusClass = "disconnected";
         break;
       case "native_connected":
         nativeHostStatusText = "Connected";
-        rpcStatusText = "Connecting..."; // Native host connected, now trying RPC
+        rpcStatusText = "Connecting..."; 
         nativeHostStatusClass = "connected";
         rpcStatusClass = "pending";
         break;
       case "rpc_connecting":
         nativeHostStatusText = "Connected";
-        rpcStatusText = "Connecting..."; // Explicitly connecting RPC
+        rpcStatusText = "Connecting..."; 
         nativeHostStatusClass = "connected";
         rpcStatusClass = "pending";
         break;
@@ -108,20 +105,14 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         rpcStatusClass = "unknown";
     }
 
-    // Update Native Host Status UI
     nativeHostStatusElement.textContent = nativeHostStatusText;
-    // Remove previous status classes and add the new one
     nativeHostStatusElement.className = "status-value " + nativeHostStatusClass;
 
-    // Update Discord RPC Status UI
     rpcStatusElement.textContent = rpcStatusText;
-    // Remove previous status classes and add the new one
     rpcStatusElement.className = "status-value " + rpcStatusClass;
 
-    // Update RPC User Info
     rpcUserElement.textContent = rpcUserText;
 
-    // Update Current Song Info
     if (currentActivity && currentActivity.details) {
       songInfoText = `${currentActivity.details} - ${currentActivity.state}`;
     } else {
@@ -130,7 +121,6 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
     currentSongElement.textContent = songInfoText;
   }
 
-  // 1. Request initial status when the popup opens
   chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {
     if (chrome.runtime.lastError) {
       console.error(
@@ -142,7 +132,7 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         `Failed to get status: ${chrome.runtime.lastError.message}`
       );
     } else if (response && response.type === "STATUS_RESPONSE") {
-      console.log("[POPUP_DEBUG] Initial GET_STATUS response:", response); // Log the whole response
+      console.log("[POPUP_DEBUG] Initial GET_STATUS response:", response);
       updatePopupUI(
         response.status,
         response.errorMessage,
@@ -173,7 +163,6 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
   if (reconnectButton) {
     reconnectButton.addEventListener("click", () => {
       console.log("Popup: Reconnect button clicked.");
-      // Optionally update UI immediately to show "Connecting..."
       updatePopupUI("connecting_native");
       chrome.runtime.sendMessage(
         { type: "RECONNECT_NATIVE_HOST" },
@@ -183,14 +172,12 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
               "Popup: Error sending RECONNECT_NATIVE_HOST message:",
               chrome.runtime.lastError.message
             );
-            // Revert status or show specific error if message sending failed
             updatePopupUI(
               "error",
               `Failed to send reconnect command: ${chrome.runtime.lastError.message}`
             );
           } else {
             console.log("Popup: RECONNECT_NATIVE_HOST message sent.", response);
-            // Background script will send STATUS_UPDATE messages as it attempts connection
           }
         }
       );
