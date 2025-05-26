@@ -93,13 +93,21 @@ function handlePortError(error, activityContextIfSet) {
         }
         updateStatus('disconnected', `Port Error: ${error.message}`, null, pendingActivity || currentActivity);
 
-        if (!connectRetryTimeout) {
-            console.log('Background: Scheduling native host reconnect due to port error in 5s.');
-            connectRetryTimeout = setTimeout(() => {
-                connectRetryTimeout = null;
-                connectToNativeHost();
-            }, 5000);
-        }
+        chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+            if (result.autoReconnectEnabled) {
+                if (!connectRetryTimeout) {
+                    console.log('Background: Auto-reconnect ON. Scheduling native host reconnect due to port error in 5s.');
+                    connectRetryTimeout = setTimeout(() => {
+                        connectRetryTimeout = null;
+                        connectToNativeHost();
+                    }, 5000);
+                } else {
+                    console.log('Background: Auto-reconnect ON, but a reconnect attempt is already scheduled (port error).');
+                }
+            } else {
+                console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (port error).');
+            }
+        });
     } else {
         updateStatus(currentStatus, `Send Error: ${error.message}`, currentRpcUser, activityContextIfSet || currentActivity);
     }
@@ -122,15 +130,21 @@ const onPortDisconnectHandler = () => {
     isRpcReady = false;
     updateStatus('disconnected', disconnectMsg, null, pendingActivity || currentActivity);
 
-    if (!connectRetryTimeout) {
-        console.log('Background: Will attempt to reconnect to native host in 5 seconds (onPortDisconnect).');
-        connectRetryTimeout = setTimeout(() => {
-            connectRetryTimeout = null;
-            connectToNativeHost();
-        }, 5000);
-    } else {
-        console.log('Background: A reconnect attempt is already scheduled.');
-    }
+    chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+        if (result.autoReconnectEnabled) {
+            if (!connectRetryTimeout) {
+                console.log('Background: Auto-reconnect ON. Will attempt to reconnect to native host in 5 seconds (onPortDisconnect).');
+                connectRetryTimeout = setTimeout(() => {
+                    connectRetryTimeout = null;
+                    connectToNativeHost();
+                }, 5000);
+            } else {
+                console.log('Background: Auto-reconnect ON, but a reconnect attempt is already scheduled (onPortDisconnect).');
+            }
+        } else {
+            console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (onPortDisconnect).');
+        }
+    });
 };
 
 function connectToNativeHost() {
@@ -230,13 +244,21 @@ function connectToNativeHost() {
     }
     updateStatus('disconnected', `Connection Error: ${error.message}`, null, pendingActivity || currentActivity);
 
-    if (!connectRetryTimeout) {
-      console.log('Background: Will attempt to reconnect to native host (due to connection error) in 10 seconds.');
-      connectRetryTimeout = setTimeout(() => {
-        connectRetryTimeout = null;
-        connectToNativeHost();
-      }, 10000);
-    }
+    chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+        if (result.autoReconnectEnabled) {
+            if (!connectRetryTimeout) {
+                console.log('Background: Auto-reconnect ON. Will attempt to reconnect to native host (due to connection error) in 10 seconds.');
+                connectRetryTimeout = setTimeout(() => {
+                    connectRetryTimeout = null;
+                    connectToNativeHost();
+                }, 10000);
+            } else {
+                console.log('Background: Auto-reconnect ON, but a reconnect attempt is already scheduled (connection error).');
+            }
+        } else {
+            console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (connection error).');
+        }
+    });
   }
 }
 
@@ -277,6 +299,8 @@ function processClearActivity() {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
     if (message && message.track && message.artist) {
+      const searchQuery = `${message.artist} ${message.track}`; // Artist then Track for better search
+      const songUrl = `https://music.youtube.com/search?q=${encodeURIComponent(searchQuery)}`;
       const activity = {
         details: `${message.track}`,
         state: `${message.artist}`,
@@ -288,7 +312,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         smallImageKey: 'play', 
         smallImageText: 'Playing',
 
-        albumArtUrl: message.albumArtUrl || null 
+        albumArtUrl: message.albumArtUrl || null,
+
+        buttons: [
+          {
+            label: "Link",
+            url: songUrl
+          },
+          {
+            label: "GitHub",
+            url: "https://github.com/FishysPop/Youtube-music-rich-presence"
+          }
+        ]
       };
 
       if (message.albumArtUrl) {

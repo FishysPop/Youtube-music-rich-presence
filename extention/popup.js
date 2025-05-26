@@ -20,16 +20,40 @@ const openOptionsButton = document.getElementById("openOptionsButton");
 const optionsPanel = document.getElementById("optionsPanel");
 const logContent = document.getElementById("logContent");
 const hideOptionsButton = document.getElementById("hideOptionsButton");
+  const autoReconnectCheckbox = document.getElementById("autoReconnectCheckbox");
 
 if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
   openOptionsButton.addEventListener("click", () => {
-    logContent.textContent = errorLogs.join("\n") || "No errors yet.";
-    optionsPanel.style.display = "block";
+    if (optionsPanel.style.display === "block") {
+      optionsPanel.style.display = "none";
+    } else {
+      logContent.textContent = errorLogs.join("\n") || "No errors yet.";
+      optionsPanel.style.display = "block";
+      logContent.scrollTop = logContent.scrollHeight; // Scroll to bottom when opening
+    }
   });
   hideOptionsButton.addEventListener("click", () => {
     optionsPanel.style.display = "none";
   });
 }
+
+  // Auto Reconnect Checkbox Logic
+  if (autoReconnectCheckbox) {
+    // Load saved state on popup open
+    chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+      autoReconnectCheckbox.checked = result.autoReconnectEnabled;
+    });
+
+    autoReconnectCheckbox.addEventListener("change", () => {
+      const enabled = autoReconnectCheckbox.checked;
+      chrome.storage.local.set({ autoReconnectEnabled: enabled }, () => {
+        console.log(`Popup: Auto Reconnect set to ${enabled}`);
+        // Optional: Send a message to background if it needs to react immediately,
+        // but background will primarily read from storage on disconnect.
+      });
+    });
+  }
+
 }
 );
   const nativeHostStatusElement = document.getElementById("nativeHostStatus");
