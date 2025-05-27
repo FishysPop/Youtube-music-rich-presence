@@ -192,6 +192,22 @@ function connectToNativeHost() {
             console.error('Background: Received RPC_ERROR from native host:', message.message, message.errorDetails || '');
             isRpcReady = false;
             updateStatus('native_connected', `RPC Error: ${message.message || 'Unknown RPC error'}`, null, pendingActivity || currentActivity);
+
+            chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+                if (result.autoReconnectEnabled) {
+                    if (!connectRetryTimeout) {
+                        console.log('Background: Auto-reconnect ON. Will attempt to reconnect Discord RPC in 5 seconds.');
+                        connectRetryTimeout = setTimeout(() => {
+                            connectRetryTimeout = null;
+                            reconnectDiscordRpcOnly();
+                        }, 5000);
+                    } else {
+                        console.log('Background: Auto-reconnect ON, but a reconnect attempt is already scheduled (RPC error).');
+                    }
+                } else {
+                    console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (RPC error).');
+                }
+            });
         } else if (message.type === 'ACTIVITY_STATUS') {
             console.log('Background: Received ACTIVITY_STATUS:', message);
             switch (message.status) {
@@ -277,6 +293,19 @@ function processNewActivity(activityData) {
         connectToNativeHost();
     }
   }
+}
+function reconnectDiscordRpcOnly() {
+    if (port) {
+        try {
+            port.postMessage({ type: 'RECONNECT_RPC' });
+            console.log('Background: Sent RECONNECT_RPC to native host.');
+        } catch (e) {
+            console.warn('Background: Failed to send RECONNECT_RPC, will reconnect native host instead.', e.message);
+            connectToNativeHost();
+        }
+    } else {
+        connectToNativeHost();
+    }
 }
 
 function processClearActivity() {
