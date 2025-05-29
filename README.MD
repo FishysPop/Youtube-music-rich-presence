@@ -1,5 +1,7 @@
 # YouTube Music Rich Presence for Discord
 
+![YouTube Music Rich Presence in Discord](https://i.imgur.com/eiwgrjC.png)
+
 Displays your YouTube Music activity as your Discord Rich Presence. This Chrome extension needs a native host app to communicate with Discord.
 
 ## ✨ Features
