@@ -57,6 +57,7 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
   const rpcUserElement = document.getElementById("rpcUser");
   const currentSongElement = document.getElementById("currentSong");
   const reconnectButton = document.getElementById("reconnectButton");
+  const nativeHostWarningElement = document.getElementById("nativeHostWarning");
 
   function updatePopupUI(
     status,
@@ -76,6 +77,10 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
     let rpcStatusClass = "status-unknown";
     let songInfoText = "Waiting for music...";
     let rpcUserText = "\u00A0"; 
+
+    if (nativeHostWarningElement) {
+      nativeHostWarningElement.style.display = 'none'; // Hide warning by default
+    }
 
     reconnectButton.disabled = false;
 
@@ -149,6 +154,25 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
       songInfoText = "Waiting for music...";
     }
     currentSongElement.textContent = songInfoText;
+
+    if (nativeHostWarningElement && (status === "disconnected" || status === "error")) {
+      let showWarning = false;
+      if (errorMessage) {
+          const lowerErrorMessage = errorMessage.toLowerCase();
+          const isManualAction = lowerErrorMessage.includes("manual");
+
+          if (!isManualAction) {
+              if (
+                  lowerErrorMessage.includes("native host") ||
+                  lowerErrorMessage.includes("connection error:") || 
+                  lowerErrorMessage.includes("port error:") 
+              ) {
+                  showWarning = true;
+              }
+          }
+      }
+      nativeHostWarningElement.style.display = showWarning ? 'block' : 'none';
+    }
   }
 
   chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {

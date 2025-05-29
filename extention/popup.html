@@ -159,11 +159,22 @@
     <div id="currentSong" class="song-info">Waiting for music...</div>
   </div>
 
+  <div id="nativeHostWarning" class="status-section" style="display:none; border-color: var(--error); background: #2f2323;">
+    <span class="status-label" style="color: var(--error); margin-bottom: 5px;">Native Host Issue</span>
+    <p style="margin: 2px 0 5px 0; font-size: 0.9em; color: var(--text-muted);">
+      Could not connect. Please ensure the helper application is installed and running.
+    </p>
+    <p style="margin: 0; font-size: 0.9em;">
+      <a href="https://github.com/FishysPop/Youtube-music-rich-presence/releases" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: underline;">
+        Download from GitHub Releases
+      </a>
+    </p>
+  </div>
+
 <div class="button-row">
   <button id="reconnectButton">Reconnect</button>
   <button id="openOptionsButton">Options</button>
 </div>
-
 <div id="optionsPanel" style="display:none; background:#181a20; color:#faa61a; border:1px solid #faa61a; border-radius:8px; margin-top:10px; padding:10px; max-height:180px; overflow:auto; font-size:0.95em;">
   <div style="font-weight:bold; margin-bottom:6px; color:#faa61a;">Options</div>
   <div style="margin-top: 10px; margin-bottom: 10px; display: flex; align-items: center;">
