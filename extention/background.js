@@ -2,6 +2,8 @@ const nativeHostName = 'com.fishypop.ytmusic_rpc';
 
 let port = null;
 let connectRetryTimeout = null;
+let periodicCheckIntervalId = null;
+const PERIODIC_CHECK_INTERVAL = 30000; // 30 seconds
 
 // --- State Management ---
 let currentStatus = 'disconnected'; // Overall status: disconnected, connecting_native, native_connected, rpc_ready, error
@@ -325,10 +327,38 @@ function processClearActivity() {
   }
 }
 
+function periodicConnectionCheck() {
+    console.log(`Background (Periodic Check): Status: ${currentStatus}, Port: ${!!port}, RPC Ready: ${isRpcReady}, Retry Scheduled: ${!!connectRetryTimeout}`);
+
+    if (!port && !connectRetryTimeout && (currentStatus === 'disconnected' || currentStatus === 'error')) {
+        console.log('Background (Periodic Check): Detected native host disconnected state with no active port or retry.');
+        chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+            if (result.autoReconnectEnabled) {
+                console.log('Background (Periodic Check): Auto-reconnect is ON. Attempting to connect to native host.');
+                connectToNativeHost();
+            } else {
+                console.log('Background (Periodic Check): Auto-reconnect is OFF. Not attempting connection via periodic check.');
+            }
+        });
+        return;
+    }
+
+    if (port && !isRpcReady && !connectRetryTimeout) {
+        if (currentStatus === 'native_connected') {
+            console.log('Background (Periodic Check): Native host connected, but RPC not ready. No retry scheduled. Attempting to reconnect RPC.');
+            reconnectDiscordRpcOnly();
+        } else if (currentStatus === 'rpc_ready') {
+            console.warn('Background (Periodic Check): Inconsistent state - currentStatus is rpc_ready but isRpcReady is false. Attempting to reconnect RPC.');
+            reconnectDiscordRpcOnly();
+        }
+    }
+}
+
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
     if (message && message.track && message.artist) {
-      const searchQuery = `${message.artist} ${message.track}`; // Artist then Track for better search
+      const searchQuery = `${message.artist} ${message.track}`; 
       const songUrl = `https://music.youtube.com/search?q=${encodeURIComponent(searchQuery)}`;
       const activity = {
         details: `${message.track}`,
@@ -367,7 +397,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (sendResponse) sendResponse({ status: "No track detected, clear processed by background" });
         return false; 
     } else {
-        // console.warn("Background: Message from YouTube Music tab, but not recognized track/artist or NO_TRACK. Message:", JSON.stringify(message));
     }
   } else if (message && message.type === 'GET_STATUS') { 
       const activityForPopup = pendingActivity || currentActivity || null;
@@ -400,6 +429,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       connectToNativeHost();
       if (sendResponse) sendResponse({ status: "Attempting to reconnect native host" });
       return true; 
+  } else if (message && message.type === 'DISCONNECT_NATIVE_HOST') {
+    console.log('Background: Received DISCONNECT_NATIVE_HOST request.');
+    if (port) {
+        if (connectRetryTimeout) {
+            clearTimeout(connectRetryTimeout);
+            connectRetryTimeout = null;
+            console.log('Background: Cleared connectRetryTimeout due to manual disconnect.');
+        }
+
+        port.onDisconnect.removeListener(onPortDisconnectHandler);
+
+        try {
+            port.disconnect();
+            console.log('Background: Native port disconnected manually.');
+        } catch (e) {
+            console.warn("Background: Error disconnecting port during manual disconnect:", e.message);
+        }
+        port = null; 
+    }
+
+    isRpcReady = false;
+    if (!pendingActivity && currentActivity) { 
+        pendingActivity = currentActivity;
+    }
+    updateStatus('disconnected', 'Manually disconnected by user.', null, pendingActivity);
+    if (sendResponse) sendResponse({ status: "Native host disconnect initiated and state updated" });
+    return true;
   } else if (message && message.type === 'OPEN_OPTIONS_PAGE') { 
       chrome.runtime.openOptionsPage();
       if (sendResponse) sendResponse({ status: "Options page open request sent" });
@@ -409,11 +465,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+function reInjectContentScripts() {
+  chrome.tabs.query({ url: "*://music.youtube.com/*", status: "complete" }, (tabs) => {
+    if (chrome.runtime.lastError) {
+      console.warn("Background: Error querying YouTube Music tabs for re-injection:", chrome.runtime.lastError.message);
+      return;
+    }
+    if (tabs && tabs.length > 0) {
+      console.log(`Background: Found ${tabs.length} YouTube Music tab(s) to potentially re-inject content script.`);
+      tabs.forEach((tab) => {
+        if (tab.id) {
+          chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['content.js']
+          }).then(() => {
+            console.log(`Background: Successfully re-injected content script into tab ${tab.id} (${tab.url ? tab.url.substring(0, 50) + '...' : 'URL not available'}).`);
+          }).catch(err => {
+            if (!err.message.toLowerCase().includes('frame with id 0 was not found') && 
+                !err.message.toLowerCase().includes('cannot access a chrome extension url') &&
+                !err.message.toLowerCase().includes('cannot access contents of url')) {
+                 console.warn(`Background: Failed to re-inject content script into tab ${tab.id}:`, err.message);
+            }
+          });
+        }
+      });
+    } else {
+      console.log("Background: No active YouTube Music tabs found for content script re-injection.");
+    }
+  });
+}
+
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('Background: Extension installed or updated:', details.reason);
   currentActivity = null;
   pendingActivity = null;
   connectToNativeHost();
+  reInjectContentScripts(); // Re-inject on install/update
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -421,7 +508,13 @@ chrome.runtime.onStartup.addListener(() => {
   currentActivity = null;
   pendingActivity = null;
   connectToNativeHost();
+  reInjectContentScripts(); // Re-inject on browser startup
 });
 
 connectToNativeHost();
+
+if (periodicCheckIntervalId) {
+    clearInterval(periodicCheckIntervalId);
+}
+periodicCheckIntervalId = setInterval(periodicConnectionCheck, PERIODIC_CHECK_INTERVAL);
 console.log('Background: YouTube Music Rich Presence background script initialized.');

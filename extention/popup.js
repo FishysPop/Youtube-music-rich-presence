@@ -29,7 +29,7 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
     } else {
       logContent.textContent = errorLogs.join("\n") || "No errors yet.";
       optionsPanel.style.display = "block";
-      logContent.scrollTop = logContent.scrollHeight; // Scroll to bottom when opening
+      logContent.scrollTop = logContent.scrollHeight; 
     }
   });
   hideOptionsButton.addEventListener("click", () => {
@@ -37,9 +37,7 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
   });
 }
 
-  // Auto Reconnect Checkbox Logic
   if (autoReconnectCheckbox) {
-    // Load saved state on popup open
     chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
       autoReconnectCheckbox.checked = result.autoReconnectEnabled;
     });
@@ -48,8 +46,6 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
       const enabled = autoReconnectCheckbox.checked;
       chrome.storage.local.set({ autoReconnectEnabled: enabled }, () => {
         console.log(`Popup: Auto Reconnect set to ${enabled}`);
-        // Optional: Send a message to background if it needs to react immediately,
-        // but background will primarily read from storage on disconnect.
       });
     });
   }
@@ -81,6 +77,8 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
     let songInfoText = "Waiting for music...";
     let rpcUserText = "\u00A0"; 
 
+    reconnectButton.disabled = false;
+
     switch (status) {
       case "disconnected":
         nativeHostStatusText = "Disconnected";
@@ -93,6 +91,7 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         rpcStatusText = "Disconnected"; 
         nativeHostStatusClass = "pending";
         rpcStatusClass = "disconnected";
+        reconnectButton.disabled = true;
         break;
       case "native_connected":
         nativeHostStatusText = "Connected";
@@ -105,6 +104,7 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         rpcStatusText = "Connecting..."; 
         nativeHostStatusClass = "connected";
         rpcStatusClass = "pending";
+        reconnectButton.disabled = true;
         break;
       case "rpc_ready":
         nativeHostStatusText = "Connected";
@@ -114,6 +114,8 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         if (rpcUser) {
           rpcUserText = `Logged in as ${rpcUser.username}`;
         }
+        reconnectButton.textContent = "Disconnect";
+        reconnectButton.title = "Disconnect from Native Host and Discord";
         break;
   case "error":
     nativeHostStatusText = "Disconnected";
@@ -129,6 +131,10 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         rpcStatusClass = "unknown";
     }
 
+    if (status !== "rpc_ready") {
+        reconnectButton.textContent = "Reconnect";
+        reconnectButton.title = "Attempt to reconnect to Native Host";
+    }
     nativeHostStatusElement.textContent = nativeHostStatusText;
     nativeHostStatusElement.className = "status-value " + nativeHostStatusClass;
 
@@ -186,25 +192,39 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
 
   if (reconnectButton) {
     reconnectButton.addEventListener("click", () => {
-      console.log("Popup: Reconnect button clicked.");
-      updatePopupUI("connecting_native");
-      chrome.runtime.sendMessage(
-        { type: "RECONNECT_NATIVE_HOST" },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            console.error(
-              "Popup: Error sending RECONNECT_NATIVE_HOST message:",
-              chrome.runtime.lastError.message
-            );
-            updatePopupUI(
-              "error",
-              `Failed to send reconnect command: ${chrome.runtime.lastError.message}`
-            );
-          } else {
-            console.log("Popup: RECONNECT_NATIVE_HOST message sent.", response);
+      if (reconnectButton.textContent === "Disconnect") {
+        console.log("Popup: Disconnect button clicked.");
+        nativeHostStatusElement.textContent = "Disconnecting...";
+        nativeHostStatusElement.className = "status-value pending";
+        rpcStatusElement.textContent = "Disconnecting...";
+        rpcStatusElement.className = "status-value pending";
+        reconnectButton.disabled = true;
+
+        chrome.runtime.sendMessage({ type: "DISCONNECT_NATIVE_HOST" }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error("Popup: Error sending DISCONNECT_NATIVE_HOST message:", chrome.runtime.lastError.message);
+            } else {
+                console.log("Popup: DISCONNECT_NATIVE_HOST message sent.", response);
+            }
+        });
+      } else { 
+        console.log("Popup: Reconnect button clicked.");
+        updatePopupUI("connecting_native"); 
+        reconnectButton.disabled = true;
+        chrome.runtime.sendMessage(
+          { type: "RECONNECT_NATIVE_HOST" },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              console.error(
+                "Popup: Error sending RECONNECT_NATIVE_HOST message:",
+                chrome.runtime.lastError.message
+              );
+            } else {
+              console.log("Popup: RECONNECT_NATIVE_HOST message sent.", response);
+            }
           }
-        }
-      );
+        );
+      }
     });
   }
 
