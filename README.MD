@@ -51,7 +51,7 @@ You need to install two things: the Native Host and the Chrome Extension.
 ### 2. 🌐 Chrome Extension
 
    *   **Option A: Chrome Web Store (Recommended)**
-      *   *(Link will be here once published.)*
+      *   [https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb](https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb)
    *   **Option B: Manual Installation (Sideloading)**
       1.  Download or clone this repository.
       2.  Extract the ZIP file if you downloaded it.

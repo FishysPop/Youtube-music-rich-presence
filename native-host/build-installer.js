@@ -3,7 +3,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const NATIVE_HOST_NAME = 'com.fishypop.ytmusic_rpc';
-const EXTENSION_ID = 'annmchgfdlioinmhdjenpegklcdigblg';
+const EXTENSION_ID = 'nnkdglgpmblpcmnojjekboafalidkmkb';
 const APP_NAME = 'YouTubeMusicRPCHelper';
 const COMPANY_NAME = 'FishyPop'; // Define company name here
 const OUTPUT_SETUP_FILENAME = 'YouTubeMusicRPCSetup.exe';

@@ -4,6 +4,6 @@
   "path": "C:\\path\\to\\your\\packaged\\native-host-executable.exe", 
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://annmchgfdlioinmhdjenpegklcdigblg/" 
+    "chrome-extension://nnkdglgpmblpcmnojjekboafalidkmkb/" 
   ]
 }
