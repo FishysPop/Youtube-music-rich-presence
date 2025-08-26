@@ -73,10 +73,21 @@ function getCurrentTrackInfo() {
         }
       }
 
+      let currentTime = 0;
       let duration = 0;
       if (timeInfoElement && timeInfoElement.innerText) {
           const timeParts = timeInfoElement.innerText.split(' / ');
           if (timeParts.length === 2) {
+              // Extract current time
+              const currentTimeString = timeParts[0].trim();
+              const currentTimeParts = currentTimeString.split(':').map(Number);
+              if (currentTimeParts.length === 2) {
+                  currentTime = currentTimeParts[0] * 60 + currentTimeParts[1];
+              } else if (currentTimeParts.length === 3) { // Handle HH:MM:SS
+                  currentTime = currentTimeParts[0] * 3600 + currentTimeParts[1] * 60 + currentTimeParts[2];
+              }
+              
+              // Extract duration
               const durationString = timeParts[1].trim();
               const durationParts = durationString.split(':').map(Number);
               if (durationParts.length === 2) {
@@ -92,7 +103,7 @@ function getCurrentTrackInfo() {
           isPlaying = playPauseButton.title === 'Pause'; // If title is 'Pause', it's playing
       }
 
-      return { track, artist, albumArtUrl, duration, isPlaying }; 
+      return { track, artist, albumArtUrl, currentTime, duration, isPlaying };
     }
   } catch (error) {
     console.error('ContentScript: Error in getCurrentTrackInfo:', error);
@@ -138,6 +149,7 @@ let lastSentArtist = null;
 let lastSentAlbumArtUrl = null;
 let lastSentDuration = null;
 let lastSentIsPlaying = null;
+let lastSentCurrentTime = null;
 let updateDebounceTimer = null;
 let trackChangeGracePeriodActive = false;
 let trackChangeGracePeriodTimer = null;
@@ -234,7 +246,8 @@ function updateTrackInfo(forceSend = false) {
             currentTrackInfo.artist !== lastSentArtist ||
             currentTrackInfo.albumArtUrl !== lastSentAlbumArtUrl ||
             currentTrackInfo.duration !== lastSentDuration ||
-            isPlayingToSend !== lastSentIsPlaying) {
+            isPlayingToSend !== lastSentIsPlaying ||
+            currentTrackInfo.currentTime !== lastSentCurrentTime) {
             
             // Create a copy to send with potentially modified isPlaying
             const dataToSend = { ...currentTrackInfo, isPlaying: isPlayingToSend };
@@ -245,6 +258,7 @@ function updateTrackInfo(forceSend = false) {
             lastSentAlbumArtUrl = currentTrackInfo.albumArtUrl;
             lastSentDuration = currentTrackInfo.duration;
             lastSentIsPlaying = isPlayingToSend; // Store the sent isPlaying status
+            lastSentCurrentTime = currentTrackInfo.currentTime; // Store the sent currentTime
         } else {
         }
     } else {
@@ -274,6 +288,7 @@ navigationFinishListener = () => {
     lastSentAlbumArtUrl = null;
     lastSentDuration = null;
     lastSentIsPlaying = null;
+    lastSentCurrentTime = null;
     // Clear grace period state on navigation finish
     clearTimeout(trackChangeGracePeriodTimer);
     trackChangeGracePeriodActive = false;

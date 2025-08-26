@@ -340,7 +340,7 @@ scheduleReconnect(reconnectDiscordRpcOnly); // Use the backoff mechanism
   }
 }
 
-function processNewActivity(message) { 
+function processNewActivity(message) {
     if (!currentSongActivity || currentSongActivity.details !== message.track || currentSongActivity.state !== message.artist) {
         currentSongActivity = {
             details: message.track,
@@ -357,8 +357,18 @@ function processNewActivity(message) {
             statusDisplayType : 2,
             type: 2
         };
-        currentSongActivity.startTimestamp = Math.floor(Date.now());
+        currentSongActivity.startTimestamp = Math.floor(Date.now()) - (message.currentTime * 1000);
         pausedTimestamp = null;
+    } else if (message.currentTime !== undefined) {
+        // Handle seeking - check if current time is significantly different from expected time
+        const expectedCurrentTime = (Math.floor(Date.now()) - currentSongActivity.startTimestamp) / 1000;
+        const timeDifference = Math.abs(message.currentTime - expectedCurrentTime);
+        
+        // If time difference is more than 2 seconds, it's likely a seek
+        if (timeDifference > 2) {
+            // Update start timestamp to reflect the new position
+            currentSongActivity.startTimestamp = Math.floor(Date.now()) - (message.currentTime * 1000);
+        }
     }
 
     if (!message.isPlaying && pausedTimestamp === null) { // Just paused
