@@ -1,9 +1,15 @@
 const nativeHostName = 'com.fishypop.ytmusic_rpc';
+const REQUIRED_NATIVE_HOST_VERSION = "1.0.0"; // Corresponds to NATIVE_HOST_VERSION in native-host.js
 
 let port = null;
 let connectRetryTimeout = null;
 let periodicCheckIntervalId = null;
-const PERIODIC_CHECK_INTERVAL = 30000; // 30 seconds
+const PERIODIC_CHECK_INTERVAL = 1200000;
+
+// --- Dynamic Reconnection Timer ---
+let reconnectAttempts = 0;
+const INITIAL_RECONNECT_DELAY = 5000; // 5 seconds
+const MAX_RECONNECT_DELAY = 180000; // 3 minutes
 
 // --- State Management ---
 let currentStatus = 'disconnected'; // Overall status: disconnected, connecting_native, native_connected, rpc_ready, error
@@ -12,6 +18,13 @@ let currentActivity = null; // Last known activity (from content script or confi
 let currentRpcUser = null;
 let isRpcReady = false; // True if native host reports RPC is connected/ready
 let pendingActivity = null; // Activity data waiting to be sent when RPC is ready
+let isManuallyDisconnected = false; // Flag to track manual disconnections
+let nativeHostVersion = null; // Stores the version reported by the native host
+let nativeHostVersionMismatch = false; // True if nativeHostVersion < REQUIRED_NATIVE_HOST_VERSION
+
+// New state for accurate timestamps
+let currentSongActivity = null; // Stores the activity data with original startTimestamp
+let pausedTimestamp = null; // Stores Date.now() when song was paused
 
 /**
  * Updates the internal state and notifies the popup.
@@ -20,8 +33,10 @@ let pendingActivity = null; // Activity data waiting to be sent when RPC is read
  * @param {object|null|undefined} rpcUser - Optional Discord user object. If undefined, existing user persists. If null, clears.
  * @param {object|null|undefined} overridePopupActivity - Optional. If provided, this activity object (or null) will be sent to the popup
  *                                                      as 'currentActivity' for THIS specific status update, overriding the global currentActivity.
+ * @param {string|undefined} hostVersion - Optional native host version. If undefined, existing version persists. If null, clears.
+ * @param {boolean|undefined} versionMismatch - Optional boolean for version mismatch.
  */
-function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, overridePopupActivity = undefined) {
+function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, overridePopupActivity = undefined, hostVersion = undefined, versionMismatch = undefined) {
 
     currentStatus = newStatus;
 
@@ -30,6 +45,12 @@ function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, 
     }
     if (rpcUser !== undefined) {
         currentRpcUser = rpcUser;
+    }
+    if (hostVersion !== undefined) {
+        nativeHostVersion = hostVersion;
+    }
+    if (versionMismatch !== undefined) {
+        nativeHostVersionMismatch = versionMismatch;
     }
 
     if ((newStatus === 'rpc_ready' || newStatus === 'native_connected') && errorMessage === undefined) {
@@ -47,11 +68,22 @@ function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, 
         status: currentStatus,
         errorMessage: statusErrorMessage,
         rpcUser: currentRpcUser,
-        currentActivity: activityForThisPopupUpdate
+        currentActivity: activityForThisPopupUpdate,
+        nativeHostVersion: nativeHostVersion,
+        nativeHostVersionMismatch: nativeHostVersionMismatch
     }).catch(err => {
         if (!err.message.includes("Receiving end does not exist")) {
+            console.warn("Background: Error sending STATUS_UPDATE to popup, likely no popup open:", err.message);
         }
     });
+
+    // Update extension icon badge
+    if (newStatus === 'disconnected' || newStatus === 'error') {
+        chrome.action.setBadgeText({ text: '!' });
+        chrome.action.setBadgeBackgroundColor({ color: '#FF0000' }); // Red color
+    } else {
+        chrome.action.setBadgeText({ text: '' }); // Clear badge
+    }
 }
 
 function _sendSetActivityToNativeHost(activityData) {
@@ -93,19 +125,16 @@ function handlePortError(error, activityContextIfSet) {
         if (activityContextIfSet) {
             pendingActivity = activityContextIfSet;
         }
-        updateStatus('disconnected', `Port Error: ${error.message}`, null, pendingActivity || currentActivity);
+        updateStatus('disconnected', `Port Error: ${error.message}`, null, pendingActivity || currentActivity, null, false); // Clear version and reset mismatch on disconnection
 
         chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
             if (result.autoReconnectEnabled) {
-                if (!connectRetryTimeout) {
-                    console.log('Background: Auto-reconnect ON. Scheduling native host reconnect due to port error in 5s.');
-                    connectRetryTimeout = setTimeout(() => {
-                        connectRetryTimeout = null;
-                        connectToNativeHost();
-                    }, 5000);
-                } else {
-                    console.log('Background: Auto-reconnect ON, but a reconnect attempt is already scheduled (port error).');
+                if (isManuallyDisconnected) {
+                    console.log('Background: Auto-reconnect skipped due to manual disconnect.');
+                    return;
                 }
+                console.log('Background: Auto-reconnect ON. Scheduling native host reconnect due to port error.');
+                scheduleReconnect();
             } else {
                 console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (port error).');
             }
@@ -130,19 +159,16 @@ const onPortDisconnectHandler = () => {
     }
     port = null;
     isRpcReady = false;
-    updateStatus('disconnected', disconnectMsg, null, pendingActivity || currentActivity);
+    updateStatus('disconnected', disconnectMsg, null, pendingActivity || currentActivity, null, false); // Clear version and reset mismatch on disconnection
 
     chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
         if (result.autoReconnectEnabled) {
-            if (!connectRetryTimeout) {
-                console.log('Background: Auto-reconnect ON. Will attempt to reconnect to native host in 5 seconds (onPortDisconnect).');
-                connectRetryTimeout = setTimeout(() => {
-                    connectRetryTimeout = null;
-                    connectToNativeHost();
-                }, 5000);
-            } else {
-                console.log('Background: Auto-reconnect ON, but a reconnect attempt is already scheduled (onPortDisconnect).');
+            if (isManuallyDisconnected) {
+                console.log('Background: Auto-reconnect skipped due to manual disconnect.');
+                return;
             }
+            console.log('Background: Auto-reconnect ON. Will attempt to reconnect to native host (onPortDisconnect).');
+            scheduleReconnect();
         } else {
             console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (onPortDisconnect).');
         }
@@ -157,6 +183,12 @@ function connectToNativeHost() {
     return;
   }
 
+  if (isManuallyDisconnected) {
+      console.log('Background: Not attempting to connect to native host because it was manually disconnected.');
+      updateStatus('disconnected', 'Manually disconnected by user.', null, pendingActivity || currentActivity);
+      return;
+  }
+
   console.log(`Background: Attempting to connect to native host: ${nativeHostName}`);
   isRpcReady = false;
   updateStatus('connecting_native', null, null, pendingActivity || currentActivity);
@@ -165,19 +197,33 @@ function connectToNativeHost() {
     port = chrome.runtime.connectNative(nativeHostName);
 
     if (connectRetryTimeout) {
-      clearTimeout(connectRetryTimeout);
-      connectRetryTimeout = null;
+        clearTimeout(connectRetryTimeout);
+        connectRetryTimeout = null;
     }
 
     port.onMessage.addListener((message) => {
         if (message.type === 'NATIVE_HOST_STARTED') {
             console.log('Background: Native host confirmed it has started. Waiting for RPC status.');
-            updateStatus('native_connected', null, null, pendingActivity || currentActivity);
+            reconnectAttempts = 0; // Reset backoff on successful start
+            let versionMismatch = false;
+            if (message.version) {
+                console.log(`Background: Native host version received: ${message.version}`);
+                if (message.version !== REQUIRED_NATIVE_HOST_VERSION) {
+                    console.warn(`Background: Native host version mismatch! Expected ${REQUIRED_NATIVE_HOST_VERSION}, got ${message.version}`);
+                    versionMismatch = true;
+                }
+            } else {
+                console.warn('Background: Native host version not provided in NATIVE_HOST_STARTED message. Assuming outdated.');
+                versionMismatch = true; // Assume outdated if no version is provided
+            }
+            updateStatus('native_connected', null, null, pendingActivity || currentActivity, message.version, versionMismatch);
         } else if (message.type === 'RPC_STATUS_UPDATE') {
             if (message.status === 'connected') {
                 console.log('Background: Native host reported Discord RPC is ready (connected). User:', message.user);
+                reconnectAttempts = 0; // Reset backoff on successful RPC connection
                 isRpcReady = true;
-                updateStatus('rpc_ready', undefined, message.user, pendingActivity || currentActivity);
+                isManuallyDisconnected = false; // Reset flag on successful connection
+                updateStatus('rpc_ready', undefined, message.user, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
                 if (pendingActivity) {
                     console.log('Background: RPC ready, sending pending activity:', pendingActivity);
                     _sendSetActivityToNativeHost(pendingActivity);
@@ -188,24 +234,36 @@ function connectToNativeHost() {
             } else if (message.status === 'disconnected') {
                 console.warn('Background: Native host reported Discord RPC disconnected.');
                 isRpcReady = false;
-                updateStatus('native_connected', 'Discord RPC disconnected by native host.', null, pendingActivity || currentActivity);
+                updateStatus('native_connected', 'Discord RPC disconnected by native host.', null, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
             }
         } else if (message.type === 'RPC_ERROR') {
             console.error('Background: Received RPC_ERROR from native host:', message.message, message.errorDetails || '');
             isRpcReady = false;
-            updateStatus('native_connected', `RPC Error: ${message.message || 'Unknown RPC error'}`, null, pendingActivity || currentActivity);
+            updateStatus('native_connected', `RPC Error: ${message.message || 'Unknown RPC error'}`, null, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
 
             chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
                 if (result.autoReconnectEnabled) {
-                    if (!connectRetryTimeout) {
-                        console.log('Background: Auto-reconnect ON. Will attempt to reconnect Discord RPC in 5 seconds.');
-                        connectRetryTimeout = setTimeout(() => {
-                            connectRetryTimeout = null;
-                            reconnectDiscordRpcOnly();
-                        }, 5000);
-                    } else {
-                        console.log('Background: Auto-reconnect ON, but a reconnect attempt is already scheduled (RPC error).');
+                    if (isManuallyDisconnected) {
+                        console.log('Background: Auto-reconnect skipped due to manual disconnect.');
+                        return;
                     }
+                    console.log('Background: Auto-reconnect ON. Scheduling RPC reconnect due to RPC error.');
+// Implement improved retry logic for timeout vs. authentication errors
+                    if (message.errorType === 'AUTHENTICATION_ERROR') {
+                        // For authentication errors, use longer delays or stop retrying
+                        console.log('Background: Authentication error detected. Using longer retry delays.');
+                        scheduleReconnect(reconnectDiscordRpcOnly, true); // Use longer delays
+                    } else if (message.errorType === 'TIMEOUT_ERROR') {
+                        // For timeout errors, use more aggressive retry strategy
+                        console.log('Background: Timeout error detected. Using aggressive retry strategy.');
+                        scheduleReconnectWithAggressiveBackoff(reconnectDiscordRpcOnly);
+                    } else {
+                        // For other errors, use the existing backoff strategy
+                        console.log('Background: Other RPC error detected. Using standard backoff strategy.');
+scheduleReconnect(reconnectDiscordRpcOnly); // Use the backoff mechanism
+                        
+                    }
+                    
                 } else {
                     console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (RPC error).');
                 }
@@ -222,21 +280,25 @@ function connectToNativeHost() {
                         pendingActivity.startTimestamp === message.activity.startTimestamp) {
                         pendingActivity = null;
                     }
-                    updateStatus('rpc_ready', undefined, currentRpcUser, currentActivity);
+                    updateStatus('rpc_ready', undefined, currentRpcUser, currentActivity, nativeHostVersion, nativeHostVersionMismatch);
                     break;
                 case 'cleared':
                     currentActivity = null;
                     pendingActivity = null;
-                    updateStatus('rpc_ready', undefined, currentRpcUser, null); 
+                    updateStatus('rpc_ready', undefined, currentRpcUser, null, nativeHostVersion, nativeHostVersionMismatch);
                     break;
                 case 'error_rpc_not_ready':
+                    // This status means native host is connected, but RPC client isn't ready.
+                    // This is effectively the same as native_connected state for the UI.
                     isRpcReady = false;
-                    updateStatus('native_connected', message.message, currentRpcUser, pendingActivity || currentActivity);
+                    updateStatus('native_connected', message.message, currentRpcUser, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
                     break;
                 case 'error':
                 case 'clear_error':
+                    // These errors imply the native host is still connected, but Discord RPC failed.
+                    // Keep status as native_connected for UI, but show error message.
                     isRpcReady = false;
-                    updateStatus('native_connected', message.message, null, pendingActivity || currentActivity);
+                    updateStatus('native_connected', message.message, null, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
                     break;
                 default:
                     console.warn('Background: Received unknown ACTIVITY_STATUS status:', message.status);
@@ -245,7 +307,8 @@ function connectToNativeHost() {
         } else if (message.type === 'NATIVE_HOST_ERROR') {
             console.error('Background: Received NATIVE_HOST_ERROR from native host:', message.message);
             isRpcReady = false;
-            updateStatus('error', `Native Host Error: ${message.message || 'Unknown error'}`, null, pendingActivity || currentActivity);
+            // A native host error means the native host itself is problematic, likely disconnected or unusable.
+            updateStatus('error', `Native Host Error: ${message.message || 'Unknown error'}`, null, pendingActivity || currentActivity, nativeHostVersion, true); // Set mismatch to true on native host error
         } else if (message.type === 'DEBUG_LOG') {
             console.log(`NH_DEBUG: ${message.message}`);
         }
@@ -260,19 +323,16 @@ function connectToNativeHost() {
         try { port.disconnect(); } catch(e) {/*ignore*/}
         port = null;
     }
-    updateStatus('disconnected', `Connection Error: ${error.message}`, null, pendingActivity || currentActivity);
+    updateStatus('disconnected', `Connection Error: ${error.message}`, null, pendingActivity || currentActivity, null, false); // Clear version and reset mismatch on connection error
 
     chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
         if (result.autoReconnectEnabled) {
-            if (!connectRetryTimeout) {
-                console.log('Background: Auto-reconnect ON. Will attempt to reconnect to native host (due to connection error) in 10 seconds.');
-                connectRetryTimeout = setTimeout(() => {
-                    connectRetryTimeout = null;
-                    connectToNativeHost();
-                }, 10000);
-            } else {
-                console.log('Background: Auto-reconnect ON, but a reconnect attempt is already scheduled (connection error).');
+            if (isManuallyDisconnected) {
+                console.log('Background: Auto-reconnect skipped due to manual disconnect.');
+                return;
             }
+            console.log('Background: Auto-reconnect ON. Will attempt to reconnect to native host (due to connection error).');
+            scheduleReconnect();
         } else {
             console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (connection error).');
         }
@@ -280,22 +340,109 @@ function connectToNativeHost() {
   }
 }
 
-function processNewActivity(activityData) {
-  currentActivity = activityData; // New song from content script becomes the current one
-  pendingActivity = activityData; // This is the new desired state to send to native host
-
-  updateStatus(currentStatus, statusErrorMessage, currentRpcUser, pendingActivity);
-
-  if (isRpcReady && port) {
-    _sendSetActivityToNativeHost(pendingActivity);
-  } else {
-    console.log('Background: RPC not ready or port not connected. Activity is pending.');
-    if (!port && !connectRetryTimeout) {
-        console.log('Background: Port not connected and no retry scheduled. Attempting to connect native host.');
-        connectToNativeHost();
+function processNewActivity(message) { 
+    if (!currentSongActivity || currentSongActivity.details !== message.track || currentSongActivity.state !== message.artist) {
+        currentSongActivity = {
+            details: message.track,
+            state: message.artist,
+            largeImageKey: message.albumArtUrl ? message.albumArtUrl.replace(/w\d+-h\d+/, 'w512-h512') : null, // Increase resolution
+            largeImageText: message.albumArtUrl ? `${message.track} - ${message.artist}` : 'YouTube Music',
+            smallImageKey: 'play',
+            smallImageText: 'Playing',
+            albumArtUrl: message.albumArtUrl || null,
+            buttons: [
+                { label: "Link", url: `https://music.youtube.com/search?q=${encodeURIComponent(`${message.artist} ${message.track}`)}` },
+                { label: "GitHub", url: "https://github.com/FishysPop/Youtube-music-rich-presence" }
+            ],
+            statusDisplayType : 2,
+            type: 2
+        };
+        currentSongActivity.startTimestamp = Math.floor(Date.now());
+        pausedTimestamp = null;
     }
-  }
+
+    if (!message.isPlaying && pausedTimestamp === null) { // Just paused
+        pausedTimestamp = Math.floor(Date.now());
+        delete currentSongActivity.endTimestamp;
+        currentSongActivity.smallImageKey = 'https://cdn.rcd.gg/PreMiD/resources/pause.png';
+        currentSongActivity.smallImageText = 'Paused';
+    } else if (message.isPlaying && pausedTimestamp !== null) { // Resumed from pause
+        const pauseDuration = Math.floor(Date.now()) - pausedTimestamp;
+        currentSongActivity.startTimestamp += pauseDuration;
+        pausedTimestamp = null;
+        currentSongActivity.smallImageKey = 'play';
+        currentSongActivity.smallImageText = 'Playing';
+    }
+
+    if (message.isPlaying && message.duration) {
+        currentSongActivity.endTimestamp = currentSongActivity.startTimestamp + (message.duration * 1000);
+    } else if (!message.isPlaying && currentSongActivity && currentSongActivity.endTimestamp) {
+        delete currentSongActivity.endTimestamp;
+    }
+
+    pendingActivity = currentSongActivity;
+    updateStatus(currentStatus, statusErrorMessage, currentRpcUser, pendingActivity, nativeHostVersion, nativeHostVersionMismatch);
+
+    if (isRpcReady && port) {
+        _sendSetActivityToNativeHost(pendingActivity);
+    } else {
+        console.log('Background: RPC not ready or port not connected. Activity is pending.');
+        if (!port && !connectRetryTimeout) {
+            if (isManuallyDisconnected) {
+                console.log('Background: Not attempting to connect to native host because it was manually disconnected.');
+                return;
+            }
+            console.log('Background: Port not connected and no retry scheduled. Attempting to connect native host.');
+            connectToNativeHost();
+        }
+    }
 }
+
+function scheduleReconnect(reconnectFn = connectToNativeHost, useLongerDelays = false) {
+    if (connectRetryTimeout) {
+        console.log('Background: Reconnect already scheduled.');
+        return;
+    }
+
+    let delay;
+    if (useLongerDelays) {
+        // For authentication errors, use longer delays (2x the normal delay)
+        delay = Math.min(INITIAL_RECONNECT_DELAY * 2 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY * 2);
+    } else {
+        // Standard exponential backoff
+        delay = Math.min(INITIAL_RECONNECT_DELAY * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+    }
+    
+    console.log(`Background: Scheduling reconnect in ${delay / 1000}s (attempt ${reconnectAttempts + 1})`);
+
+    connectRetryTimeout = setTimeout(() => {
+        connectRetryTimeout = null;
+        reconnectAttempts++;
+        reconnectFn();
+    }, delay);
+}
+
+// New function for aggressive retry strategy for timeout errors
+function scheduleReconnectWithAggressiveBackoff(reconnectFn = connectToNativeHost) {
+    if (connectRetryTimeout) {
+        console.log('Background: Reconnect already scheduled.');
+        return;
+    }
+
+    // Aggressive backoff: shorter initial delay and slower growth
+    const AGGRESSIVE_INITIAL_DELAY = 2000; // 2 seconds
+    const AGGRESSIVE_MAX_DELAY = 60000; // 1 minute
+    const delay = Math.min(AGGRESSIVE_INITIAL_DELAY * Math.pow(1.5, reconnectAttempts), AGGRESSIVE_MAX_DELAY);
+    
+    console.log(`Background: Scheduling aggressive reconnect in ${delay / 1000}s (attempt ${reconnectAttempts + 1})`);
+
+    connectRetryTimeout = setTimeout(() => {
+        connectRetryTimeout = null;
+        reconnectAttempts++;
+        reconnectFn();
+    }, delay);
+}
+
 function reconnectDiscordRpcOnly() {
     if (port) {
         try {
@@ -303,24 +450,30 @@ function reconnectDiscordRpcOnly() {
             console.log('Background: Sent RECONNECT_RPC to native host.');
         } catch (e) {
             console.warn('Background: Failed to send RECONNECT_RPC, will reconnect native host instead.', e.message);
-            connectToNativeHost();
+            scheduleReconnect();
         }
     } else {
-        connectToNativeHost();
+        scheduleReconnect();
     }
 }
 
 function processClearActivity() {
   currentActivity = null; // No track is playing
   pendingActivity = null; // Clear any pending song activity; intent is to clear on Discord
+  currentSongActivity = null; // Reset
+  pausedTimestamp = null; // Reset
 
-  updateStatus(currentStatus, statusErrorMessage, currentRpcUser, null);
+  updateStatus(currentStatus, statusErrorMessage, currentRpcUser, null, nativeHostVersion, nativeHostVersionMismatch);
 
   if (isRpcReady && port) {
     _sendClearActivityToNativeHost();
   } else {
     console.log('Background: RPC not ready or port not connected for clear. Will clear when RPC is ready.');
     if (!port && !connectRetryTimeout) {
+        if (isManuallyDisconnected) {
+            console.log('Background: Not attempting to connect to native host because it was manually disconnected.');
+            return;
+        }
         console.log('Background: Port not connected and no retry scheduled for clear. Attempting to connect native host.');
         connectToNativeHost();
     }
@@ -328,26 +481,36 @@ function processClearActivity() {
 }
 
 function periodicConnectionCheck() {
-    console.log(`Background (Periodic Check): Status: ${currentStatus}, Port: ${!!port}, RPC Ready: ${isRpcReady}, Retry Scheduled: ${!!connectRetryTimeout}`);
+    console.log(`Background (Periodic Check): Status: ${currentStatus}, Port: ${!!port}, RPC Ready: ${isRpcReady}, Retry Scheduled: ${!!connectRetryTimeout}, Manually Disconnected: ${isManuallyDisconnected}`);
 
-    if (!port && !connectRetryTimeout && (currentStatus === 'disconnected' || currentStatus === 'error')) {
-        console.log('Background (Periodic Check): Detected native host disconnected state with no active port or retry.');
+    if (isManuallyDisconnected) {
+        console.log('Background (Periodic Check): Skipping periodic check due to manual disconnect.');
+        return;
+    }
+
+    // Explicitly handle native_connected but RPC not ready
+    if (port && !isRpcReady && currentStatus === 'native_connected') {
+        console.log('Background (Periodic Check): Native host connected, but RPC not ready. Attempting to reconnect RPC.');
+        reconnectDiscordRpcOnly();
+        return; // Exit to avoid redundant checks
+    }
+
+    if (!port && !connectRetryTimeout && (currentStatus === 'disconnected' || currentStatus === 'error' || currentStatus === 'native_connected')) {
+        console.log('Background (Periodic Check): Detected native host disconnected/error/rpc-not-ready state with no active port or retry.');
         chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
             if (result.autoReconnectEnabled) {
                 console.log('Background (Periodic Check): Auto-reconnect is ON. Attempting to connect to native host.');
                 connectToNativeHost();
             } else {
-                console.log('Background (Periodic Check): Auto-reconnect is OFF. Not attempting connection via periodic check.');
+                console.log('Background: Auto-reconnect OFF. Not attempting connection via periodic check.');
             }
         });
         return;
     }
 
+    // This block handles the case where port exists, but RPC is not ready (and not yet in native_connected state handled above)
     if (port && !isRpcReady && !connectRetryTimeout) {
-        if (currentStatus === 'native_connected') {
-            console.log('Background (Periodic Check): Native host connected, but RPC not ready. No retry scheduled. Attempting to reconnect RPC.');
-            reconnectDiscordRpcOnly();
-        } else if (currentStatus === 'rpc_ready') {
+        if (currentStatus === 'rpc_ready') { // This state indicates an inconsistency, RPC was ready but now isRpcReady is false
             console.warn('Background (Periodic Check): Inconsistent state - currentStatus is rpc_ready but isRpcReady is false. Attempting to reconnect RPC.');
             reconnectDiscordRpcOnly();
         }
@@ -357,39 +520,9 @@ function periodicConnectionCheck() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
-    if (message && message.track && message.artist) {
-      const searchQuery = `${message.artist} ${message.track}`; 
-      const songUrl = `https://music.youtube.com/search?q=${encodeURIComponent(searchQuery)}`;
-      const activity = {
-        details: `${message.track}`,
-        state: `${message.artist}`,
-        startTimestamp: message.startTimestamp || Math.floor(Date.now() / 1000),
-        
-        largeImageKey: message.albumArtUrl || null, 
-        largeImageText: 'YouTube Music',
-
-        smallImageKey: 'play', 
-        smallImageText: 'Playing',
-
-        albumArtUrl: message.albumArtUrl || null,
-
-        buttons: [
-          {
-            label: "Link",
-            url: songUrl
-          },
-          {
-            label: "GitHub",
-            url: "https://github.com/FishysPop/Youtube-music-rich-presence"
-          }
-        ]
-      };
-
-      if (message.albumArtUrl) {
-        activity.largeImageText = `${message.track} - ${message.artist}`; 
-      }
-      
-      processNewActivity(activity);
+    isManuallyDisconnected = false; // Reset flag if activity comes from YouTube Music
+    if (message && message.track && message.artist) { // This message now includes duration and isPlaying
+      processNewActivity(message); // Pass the entire message object
       if (sendResponse) sendResponse({ status: "Activity info processed by background" });
       return false; 
     } else if (message && message.type === 'NO_TRACK') {
@@ -406,12 +539,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               status: currentStatus,
               errorMessage: statusErrorMessage,
               rpcUser: currentRpcUser,
-              currentActivity: activityForPopup
+              currentActivity: activityForPopup,
+              nativeHostVersion: nativeHostVersion,
+              nativeHostVersionMismatch: nativeHostVersionMismatch
           });
       }
-      return true; 
-  } else if (message && message.type === 'RECONNECT_NATIVE_HOST') { 
-
+      return true;
+  } else if (message && message.type === 'RECONNECT_NATIVE_HOST') {
+      isManuallyDisconnected = false; // Reset flag on manual reconnect request
       if (port) {
           try {
             port.onDisconnect.removeListener(onPortDisconnectHandler);
@@ -424,11 +559,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           connectRetryTimeout = null;
       }
       isRpcReady = false;
-      pendingActivity = currentActivity; 
-      updateStatus('disconnected', 'Manual reconnect requested.', null, pendingActivity);
+      pendingActivity = currentActivity;
+      updateStatus('disconnected', 'Manual reconnect requested.', null, pendingActivity, null, true);
       connectToNativeHost();
       if (sendResponse) sendResponse({ status: "Attempting to reconnect native host" });
-      return true; 
+      return true;
   } else if (message && message.type === 'DISCONNECT_NATIVE_HOST') {
     console.log('Background: Received DISCONNECT_NATIVE_HOST request.');
     if (port) {
@@ -446,20 +581,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } catch (e) {
             console.warn("Background: Error disconnecting port during manual disconnect:", e.message);
         }
-        port = null; 
+        port = null;
     }
 
     isRpcReady = false;
-    if (!pendingActivity && currentActivity) { 
+    isManuallyDisconnected = true; // Set the flag when manually disconnected
+    if (!pendingActivity && currentActivity) {
         pendingActivity = currentActivity;
     }
-    updateStatus('disconnected', 'Manually disconnected by user.', null, pendingActivity);
+    updateStatus('disconnected', 'Manually disconnected by user.', null, pendingActivity, null, true);
     if (sendResponse) sendResponse({ status: "Native host disconnect initiated and state updated" });
     return true;
-  } else if (message && message.type === 'OPEN_OPTIONS_PAGE') { 
+  } else if (message && message.type === 'OPEN_OPTIONS_PAGE') {
       chrome.runtime.openOptionsPage();
       if (sendResponse) sendResponse({ status: "Options page open request sent" });
-      return true; 
+      return true;
   } else {
   }
   return false;
@@ -494,11 +630,13 @@ function reInjectContentScripts() {
     }
   });
 }
-
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('Background: Extension installed or updated:', details.reason);
   currentActivity = null;
   pendingActivity = null;
+  isManuallyDisconnected = false; // Reset on install/update
+  currentSongActivity = null; // Reset
+  pausedTimestamp = null; // Reset
   connectToNativeHost();
   reInjectContentScripts(); // Re-inject on install/update
 });
@@ -507,6 +645,9 @@ chrome.runtime.onStartup.addListener(() => {
   console.log('Background: Browser started.');
   currentActivity = null;
   pendingActivity = null;
+  isManuallyDisconnected = false; // Reset on browser startup
+  currentSongActivity = null; // Reset
+  pausedTimestamp = null; // Reset
   connectToNativeHost();
   reInjectContentScripts(); // Re-inject on browser startup
 });

@@ -3,7 +3,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const NATIVE_HOST_NAME = 'com.fishypop.ytmusic_rpc';
-const EXTENSION_ID = 'nnkdglgpmblpcmnojjekboafalidkmkb';
+const EXTENSION_ID = process.env.YTM_RPC_EXTENSION_ID || 'nnkdglgpmblpcmnojjekboafalidkmkb'; // Use env var or default to published ID
 const APP_NAME = 'YouTubeMusicRPCHelper';
 const COMPANY_NAME = 'FishyPop'; // Define company name here
 const OUTPUT_SETUP_FILENAME = 'YouTubeMusicRPCSetup.exe';
@@ -48,7 +48,7 @@ async function buildInstaller() {
       '%%NATIVE_HOST_NAME%%': NATIVE_HOST_NAME,
       '%%NATIVE_HOST_MANIFEST_FILENAME%%': NATIVE_HOST_MANIFEST_FILENAME,
       '%%NATIVE_HOST_EXE_FILENAME%%': PKG_NATIVE_HOST_EXE_NAME, // The actual .exe name for !define
-      '%%EXTENSION_ID%%': EXTENSION_ID,
+      '%%EXTENSION_ID%%': EXTENSION_ID.trim(), // Trim whitespace/newlines
       '%%OUTPUT_FILENAME%%': OUTPUT_SETUP_FILENAME, // For !define OUTPUT_FILENAME
       '%%OUTFILE_PATH%%': path.join(installerOutputDir, OUTPUT_SETUP_FILENAME).replace(/\\/g, '\\\\'),
       '%%INSTALL_DIR_NSIS%%': installDirNSIS,

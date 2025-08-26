@@ -63,7 +63,8 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
     status,
     errorMessage = null,
     rpcUser = null,
-    currentActivity = null
+    currentActivity = null,
+    response = {} // Add response object as a parameter
   ) {
     console.log(
       "[POPUP_DEBUG] updatePopupUI called with currentActivity:",
@@ -76,11 +77,11 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
     let nativeHostStatusClass = "status-unknown";
     let rpcStatusClass = "status-unknown";
     let songInfoText = "Waiting for music...";
-    let rpcUserText = "\u00A0"; 
-
-    if (nativeHostWarningElement) {
-      nativeHostWarningElement.style.display = 'none'; // Hide warning by default
-    }
+    let rpcUserText = "\u00A0";
+    
+    // Always hide warning by default, will be shown if needed later
+    nativeHostWarningElement.style.display = 'none';
+    nativeHostWarningElement.innerHTML = ''; // Clear previous message
 
     reconnectButton.disabled = false;
 
@@ -93,20 +94,20 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         break;
       case "connecting_native":
         nativeHostStatusText = "Connecting...";
-        rpcStatusText = "Disconnected"; 
+        rpcStatusText = "Connecting...";
         nativeHostStatusClass = "pending";
-        rpcStatusClass = "disconnected";
+        rpcStatusClass = "pending"; // RPC is also attempting to connect
         reconnectButton.disabled = true;
         break;
       case "native_connected":
         nativeHostStatusText = "Connected";
-        rpcStatusText = "Connecting..."; 
+        rpcStatusText = "Connecting...";
         nativeHostStatusClass = "connected";
         rpcStatusClass = "pending";
         break;
-      case "rpc_connecting":
+      case "rpc_connecting": // This state is likely redundant if native_connected already implies RPC connecting
         nativeHostStatusText = "Connected";
-        rpcStatusText = "Connecting..."; 
+        rpcStatusText = "Connecting...";
         nativeHostStatusClass = "connected";
         rpcStatusClass = "pending";
         reconnectButton.disabled = true;
@@ -122,10 +123,10 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         reconnectButton.textContent = "Disconnect";
         reconnectButton.title = "Disconnect from Native Host and Discord";
         break;
-  case "error":
-    nativeHostStatusText = "Disconnected";
+  case "error": // This signifies a critical error with the native host itself
+    nativeHostStatusText = "Error";
     rpcStatusText = "Disconnected";
-    nativeHostStatusClass = "disconnected";
+    nativeHostStatusClass = "error";
     rpcStatusClass = "disconnected";
     console.error("Popup: Received error status:", errorMessage);
     break;
@@ -155,25 +156,35 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
     }
     currentSongElement.textContent = songInfoText;
 
-    if (nativeHostWarningElement && (status === "disconnected" || status === "error")) {
-      let showWarning = false;
-      if (errorMessage) {
-          const lowerErrorMessage = errorMessage.toLowerCase();
-          const isManualAction = lowerErrorMessage.includes("manual");
-
-          if (!isManualAction) {
-              if (
-                  lowerErrorMessage.includes("native host") ||
-                  lowerErrorMessage.includes("connection error:") || 
-                  lowerErrorMessage.includes("port error:") 
-              ) {
-                  showWarning = true;
-              }
-          }
+    if (nativeHostWarningElement) {
+      // Only show version mismatch warning if host version information is available and indicates a mismatch
+      // Only show version mismatch warning if host version information is available and indicates a mismatch
+      // AND we are not currently in a "connecting" state (to prevent flashing during reconnection)
+      if (response.nativeHostVersion !== undefined && response.nativeHostVersionMismatch && status !== "connecting_native") {
+        let warningMessage = "Native Host version mismatch. Please update your native host application.";
+        if (response.nativeHostVersion) {
+            warningMessage += ` Current: ${response.nativeHostVersion}. Required: ${REQUIRED_NATIVE_HOST_VERSION}.`;
+        }
+        nativeHostWarningElement.innerHTML = `<strong>Warning:</strong> ${warningMessage} <a href="#" id="nativeHostUpdateLink">Click here for instructions.</a>`;
+        nativeHostWarningElement.style.display = 'block';
+        // Add event listener for the update link
+        const updateLink = document.getElementById("nativeHostUpdateLink");
+        if (updateLink) {
+          updateLink.addEventListener("click", (e) => {
+            e.preventDefault();
+            // Open a new tab with instructions or a download link
+            chrome.tabs.create({ url: "https://github.com/FishysPop/Youtube-music-rich-presence/releases" }); // Replace with actual update instructions URL
+          });
+        }
+      } else {
+        // Ensure warning is hidden if not explicitly for version mismatch or if connecting
+        nativeHostWarningElement.style.display = 'none';
       }
-      nativeHostWarningElement.style.display = showWarning ? 'block' : 'none';
-    }
-  }
+}
+    } // This brace closes the updatePopupUI function.
+
+  // Define REQUIRED_NATIVE_HOST_VERSION in popup.js as well for comparison
+  const REQUIRED_NATIVE_HOST_VERSION = "1.0.0"; // Must match the version in background.js
 
   chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {
     if (chrome.runtime.lastError) {
@@ -191,14 +202,15 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         response.status,
         response.errorMessage,
         response.rpcUser,
-        response.currentActivity
+        response.currentActivity,
+        response // Pass the entire response object to updatePopupUI for version info
       );
     } else {
       console.warn(
         "Popup: Received unexpected response for GET_STATUS:",
         response
       );
-      updatePopupUI("error", "Received unexpected status response.");
+      updatePopupUI("error", "Received unexpected status response.", null, null, response); // Pass response for version info
     }
   });
 
@@ -209,13 +221,19 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
         message.status,
         message.errorMessage,
         message.rpcUser,
-        message.currentActivity
+        message.currentActivity,
+        message // Pass the entire message object to updatePopupUI for version info
       );
     }
   });
 
   if (reconnectButton) {
     reconnectButton.addEventListener("click", () => {
+      // Immediately hide the warning when reconnect is triggered
+      if (nativeHostWarningElement) {
+        nativeHostWarningElement.style.display = 'none';
+      }
+
       if (reconnectButton.textContent === "Disconnect") {
         console.log("Popup: Disconnect button clicked.");
         nativeHostStatusElement.textContent = "Disconnecting...";
@@ -231,9 +249,9 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
                 console.log("Popup: DISCONNECT_NATIVE_HOST message sent.", response);
             }
         });
-      } else { 
+      } else {
         console.log("Popup: Reconnect button clicked.");
-        updatePopupUI("connecting_native"); 
+        updatePopupUI("connecting_native");
         reconnectButton.disabled = true;
         chrome.runtime.sendMessage(
           { type: "RECONNECT_NATIVE_HOST" },
@@ -255,15 +273,7 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
 if (openOptionsButton) {
   openOptionsButton.addEventListener("click", () => {
     console.log("Popup: Options button clicked.");
-    chrome.runtime.sendMessage({ type: "OPEN_OPTIONS_PAGE" }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error(
-          "Popup: Error sending OPEN_OPTIONS_PAGE message:",
-          chrome.runtime.lastError.message
-        );
-      } else {
-        console.log("Popup: OPEN_OPTIONS_PAGE message sent.", response);
-      }
-    });
+    // The logic to toggle optionsPanel is already handled by the first event listener
+    // No need to send OPEN_OPTIONS_PAGE message as per user's request to revert old behavior
   });
 }
