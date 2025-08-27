@@ -235,6 +235,19 @@ function connectToNativeHost() {
                 console.warn('Background: Native host reported Discord RPC disconnected.');
                 isRpcReady = false;
                 updateStatus('native_connected', 'Discord RPC disconnected by native host.', null, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
+
+                chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+                    if (result.autoReconnectEnabled) {
+                        if (isManuallyDisconnected) {
+                            console.log('Background: Auto-reconnect skipped due to manual disconnect.');
+                            return;
+                        }
+                        console.log('Background: Auto-reconnect ON. Scheduling RPC reconnect due to RPC disconnect.');
+                        scheduleReconnect(reconnectDiscordRpcOnly); // Use the backoff mechanism
+                    } else {
+                        console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (RPC disconnect).');
+                    }
+                });
             }
         } else if (message.type === 'RPC_ERROR') {
             console.error('Background: Received RPC_ERROR from native host:', message.message, message.errorDetails || '');
