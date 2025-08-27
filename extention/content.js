@@ -224,12 +224,18 @@ function updateTrackInfo(forceSend = false) {
             const dataToSend = { ...currentTrackInfo, isPlaying: isPlayingToSend };
             sendMessageToBackgroundScript(dataToSend);
             
-            lastSentTrack = currentTrackInfo.track; 
+            lastSentTrack = currentTrackInfo.track;
             lastSentArtist = currentTrackInfo.artist;
             lastSentAlbumArtUrl = currentTrackInfo.albumArtUrl;
             lastSentDuration = currentTrackInfo.duration;
             lastSentIsPlaying = isPlayingToSend;
-            lastSentCurrentTime = currentTrackInfo.currentTime;
+            
+            // Only update lastSentCurrentTime if we detected a skip/seek
+            if (currentTrackInfo.currentTime !== undefined &&
+                lastSentCurrentTime !== null &&
+                Math.abs(currentTrackInfo.currentTime - lastSentCurrentTime) > 5) {
+                lastSentCurrentTime = currentTrackInfo.currentTime;
+            }
         } else {
         }
     } else {
@@ -275,8 +281,8 @@ if (playerBarObserverTarget) {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ['src', 'title', 'href'],
-        characterData: true
+        attributeFilter: ['src', 'title'],
+        characterData: false
     });
 } else {
     console.warn("[YTMusicRPC Content] ytmusic-player-bar not found for MutationObserver. Falling back to setInterval.");
