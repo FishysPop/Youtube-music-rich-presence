@@ -4,6 +4,35 @@
 
 Displays your YouTube Music activity as your Discord Rich Presence. This Chrome extension needs a native host app to communicate with Discord.
 
+## ✅ Prerequisites
+
+*   A Chromium-based web browser (e.g., Google Chrome, Microsoft Edge, Brave).
+*   The **YouTube Music Rich Presence Native Host** application.
+
+## 🚀 Installation
+
+You need to install two things: the Native Host and the Chrome Extension.
+
+### 1. Native Host Application
+
+*   Go to the **Releases Page** of this GitHub repository.
+*   Download `YouTubeMusicRPCSetup.exe` from the latest release.
+*   Run `YouTubeMusicRPCSetup.exe` and follow the on-screen instructions to install the native host application. This will register it with your browser.
+*   After installation, the native application (e.g., `youtube_music_rpc.exe`) should ideally run automatically. If not, you might need to start it manually. It needs to be running for the extension to work.
+
+### 2. 🌐 Chrome Extension
+
+*   **Option A: Chrome Web Store (Recommended)**
+    *   [https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb](https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb)
+*   **Option B: Manual Installation (Sideloading)**
+    1.  Download or clone this repository.
+    2.  Extract the ZIP file if you downloaded it.
+    3.  Go to `chrome://extensions` in your browser.
+    4.  Enable **Developer mode** (usually a top-right toggle).
+    5.  Click the **"Load unpacked"** button.
+    6.  Select the `extention` subfolder from this repository.
+    7.  The extension should now be listed and active.
+
 ## ✨ Features
 
 *   **🎤 Real-time Updates:** Shows the song, artist, and album art currently playing on YouTube Music.
@@ -28,38 +57,6 @@ This system has two parts:
     *   A separate program the extension uses to talk to Discord.
     *   Interacts with your Discord client to update Rich Presence.
     *   Download from this repository's releases.
-
-## ✅ Prerequisites
-
-*   A Chromium-based web browser (e.g., Google Chrome, Microsoft Edge, Brave).
-*   The **YouTube Music Rich Presence Native Host** application.
-
-## 🚀 Installation
-
-You need to install two things: the Native Host and the Chrome Extension.
-
-**1. Native Host Application**
-
-   *   Go to the **Releases Page** of this GitHub repository.
-   *   Download `YouTubeMusicRPCSetup.exe` from the latest release.
-   *   Run `YouTubeMusicRPCSetup.exe` and follow the on-screen instructions to install the native host application. This will register it with your browser.
-   *   **🤔 Why is a separate installer/application needed?**
-       *   **Security:** Browsers restrict extensions from running local programs directly.
-       *   **Native Messaging:** To communicate with Discord, the extension needs this helper application. The installer registers this "Native Messaging host" with your browser. This process involves creating a manifest file (JSON) that tells the browser where the `youtube_music_rpc.exe` (or similarly named executable installed by the setup) is located and allows this specific extension to connect to it. This is a standard and secure method.
-   *   After installation, the native application (e.g., `youtube_music_rpc.exe`) should ideally run automatically. If not, you might need to start it manually. It needs to be running for the extension to work.
-
-### 2. 🌐 Chrome Extension
-
-   *   **Option A: Chrome Web Store (Recommended)**
-      *   [https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb](https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb)
-   *   **Option B: Manual Installation (Sideloading)**
-      1.  Download or clone this repository.
-      2.  Extract the ZIP file if you downloaded it.
-      3.  Go to `chrome://extensions` in your browser.
-      4.  Enable **Developer mode** (usually a top-right toggle).
-      5.  Click the **"Load unpacked"** button.
-      6.  Select the `extention` subfolder from this repository.
-      7.  The extension should now be listed and active.
 
 ## ▶️ Usage
 
