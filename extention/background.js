@@ -594,7 +594,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!pendingActivity && currentActivity) {
         pendingActivity = currentActivity;
     }
-    updateStatus('disconnected', 'Manually disconnected by user.', null, pendingActivity, null, true);
+    updateStatus('disconnected', 'Manually disconnected by user.', null, pendingActivity, null, false);
     if (sendResponse) sendResponse({ status: "Native host disconnect initiated and state updated" });
     return true;
   } else if (message && message.type === 'OPEN_OPTIONS_PAGE') {
