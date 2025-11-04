@@ -20,7 +20,8 @@ const openOptionsButton = document.getElementById("openOptionsButton");
 const optionsPanel = document.getElementById("optionsPanel");
 const logContent = document.getElementById("logContent");
 const hideOptionsButton = document.getElementById("hideOptionsButton");
-  const autoReconnectCheckbox = document.getElementById("autoReconnectCheckbox");
+const autoReconnectCheckbox = document.getElementById("autoReconnectCheckbox");
+const pauseTimeoutInput = document.getElementById("pauseTimeoutInput");
 
 if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
   openOptionsButton.addEventListener("click", () => {
@@ -29,7 +30,7 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
     } else {
       logContent.textContent = errorLogs.join("\n") || "No errors yet.";
       optionsPanel.style.display = "block";
-      logContent.scrollTop = logContent.scrollHeight; 
+      logContent.scrollTop = logContent.scrollHeight;
     }
   });
   hideOptionsButton.addEventListener("click", () => {
@@ -37,18 +38,39 @@ if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
   });
 }
 
-  if (autoReconnectCheckbox) {
-    chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
-      autoReconnectCheckbox.checked = result.autoReconnectEnabled;
-    });
+if (autoReconnectCheckbox) {
+  chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+    autoReconnectCheckbox.checked = result.autoReconnectEnabled;
+  });
 
-    autoReconnectCheckbox.addEventListener("change", () => {
-      const enabled = autoReconnectCheckbox.checked;
-      chrome.storage.local.set({ autoReconnectEnabled: enabled }, () => {
-        console.log(`Popup: Auto Reconnect set to ${enabled}`);
-      });
+  autoReconnectCheckbox.addEventListener("change", () => {
+    const enabled = autoReconnectCheckbox.checked;
+    chrome.storage.local.set({ autoReconnectEnabled: enabled }, () => {
+      console.log(`Popup: Auto Reconnect set to ${enabled}`);
     });
-  }
+  });
+}
+
+if (pauseTimeoutInput) {
+ chrome.storage.local.get({ pauseTimeoutMinutes: -1 }, (result) => {
+    pauseTimeoutInput.value = result.pauseTimeoutMinutes;
+  });
+
+  pauseTimeoutInput.addEventListener("change", () => {
+    let value = parseInt(pauseTimeoutInput.value);
+    if (isNaN(value) || value < -1) {
+      value = -1;
+      pauseTimeoutInput.value = -1;
+    } else if (value > 60) {
+      value = 60;
+      pauseTimeoutInput.value = 60;
+    }
+    
+    chrome.storage.local.set({ pauseTimeoutMinutes: value }, () => {
+      console.log(`Popup: Pause Timeout set to ${value} minutes`);
+    });
+  });
+}
 
 }
 );

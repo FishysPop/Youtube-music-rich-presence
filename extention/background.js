@@ -14,16 +14,18 @@ const MAX_RECONNECT_DELAY = 180000; // 3 minutes
 // --- State Management ---
 let currentStatus = 'disconnected'; // Overall status: disconnected, connecting_native, native_connected, rpc_ready, error
 let statusErrorMessage = null;
-let currentActivity = null; 
+let currentActivity = null;
 let currentRpcUser = null;
-let isRpcReady = false; 
-let pendingActivity = null; 
-let isManuallyDisconnected = false; 
-let nativeHostVersion = null; 
-let nativeHostVersionMismatch = false; 
+let isRpcReady = false;
+let pendingActivity = null;
+let isManuallyDisconnected = false; // Used for temporary disconnects like pause timeouts
+let userDisconnected = false; // Tracks if the user has explicitly disconnected via the UI
+let nativeHostVersion = null;
+let nativeHostVersionMismatch = false;
 
-let currentSongActivity = null; 
-let pausedTimestamp = null; 
+let currentSongActivity = null;
+let pausedTimestamp = null;
+let pauseTimeoutId = null; 
 /**
  * Updates the internal state and notifies the popup.
  * @param {string} newStatus - The new primary status.
@@ -183,9 +185,15 @@ function connectToNativeHost() {
     return;
   }
 
-  if (isManuallyDisconnected) {
-      console.log('Background: Not attempting to connect to native host because it was manually disconnected.');
+  if (userDisconnected) {
+      console.log('Background: Not attempting to connect to native host because it was manually disconnected by the user.');
       updateStatus('disconnected', 'Manually disconnected by user.', null, pendingActivity || currentActivity);
+      return;
+  }
+  // This handles the case where we disconnected due to pause timeout, etc.
+  // We don't want to auto-connect in this state, we want to wait for a trigger like a new song.
+  if (isManuallyDisconnected) {
+      console.log('Background: Not attempting to connect to native host due to a temporary disconnect (e.g., pause timeout).');
       return;
   }
 
@@ -344,6 +352,14 @@ scheduleReconnect(reconnectDiscordRpcOnly);
   }
 }
 
+function getPauseTimeout() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get({ pauseTimeoutMinutes: -1 }, (result) => {
+            resolve(result.pauseTimeoutMinutes);
+        });
+    });
+}
+
 function processNewActivity(message) {
     if (!currentSongActivity || currentSongActivity.details !== message.track || currentSongActivity.state !== message.artist) {
         currentSongActivity = {
@@ -363,6 +379,20 @@ function processNewActivity(message) {
         };
         currentSongActivity.startTimestamp = Math.floor(Date.now()) - (message.currentTime * 1000);
         pausedTimestamp = null;
+        
+        // Clear any existing timeout when a new song starts
+        if (pauseTimeoutId) {
+            clearTimeout(pauseTimeoutId);
+            pauseTimeoutId = null;
+        }
+        
+        // If we were disconnected due to a pause timeout, reconnect now.
+        // Do not reconnect if the user has explicitly disconnected.
+        if (isManuallyDisconnected && !userDisconnected) {
+            isManuallyDisconnected = false;
+            console.log('Background: New song detected, reconnecting after temporary disconnect.');
+            connectToNativeHost();
+        }
     } else if (message.currentTime !== undefined) {
         const expectedCurrentTime = (Math.floor(Date.now()) - currentSongActivity.startTimestamp) / 1000;
         const timeDifference = Math.abs(message.currentTime - expectedCurrentTime);
@@ -372,17 +402,47 @@ function processNewActivity(message) {
         }
     }
 
-    if (!message.isPlaying && pausedTimestamp === null) { 
+    if (!message.isPlaying && pausedTimestamp === null) {
         pausedTimestamp = Math.floor(Date.now());
         delete currentSongActivity.endTimestamp;
         currentSongActivity.smallImageKey = 'https://cdn.rcd.gg/PreMiD/resources/pause.png';
         currentSongActivity.smallImageText = 'Paused';
-    } else if (message.isPlaying && pausedTimestamp !== null) { 
+        
+        // Set timeout to clear activity after pause timeout
+        getPauseTimeout().then((timeoutMinutes) => {
+            if (pauseTimeoutId) {
+                clearTimeout(pauseTimeoutId);
+                pauseTimeoutId = null;
+            }
+            
+            // Only set the timeout if the value is greater than 0 (-1 means disabled)
+            if (timeoutMinutes > 0) {
+                pauseTimeoutId = setTimeout(() => {
+                    console.log(`Background: Paused for ${timeoutMinutes} minutes, hiding activity`);
+                    processClearActivity();
+                }, timeoutMinutes * 60 * 1000);
+            }
+        });
+    } else if (message.isPlaying && pausedTimestamp !== null) {
         const pauseDuration = Math.floor(Date.now()) - pausedTimestamp;
         currentSongActivity.startTimestamp += pauseDuration;
         pausedTimestamp = null;
         currentSongActivity.smallImageKey = 'play';
         currentSongActivity.smallImageText = 'Playing';
+        
+        // Clear the pause timeout when playback resumes
+        if (pauseTimeoutId) {
+            clearTimeout(pauseTimeoutId);
+            pauseTimeoutId = null;
+        }
+        
+        // If we were disconnected due to a pause timeout, reconnect now.
+        // Do not reconnect if the user has explicitly disconnected.
+        if (isManuallyDisconnected && !userDisconnected) {
+            isManuallyDisconnected = false;
+            console.log('Background: Playback resumed, reconnecting after temporary disconnect.');
+            connectToNativeHost();
+        }
     }
 
     if (message.isPlaying && message.duration) {
@@ -399,10 +459,7 @@ function processNewActivity(message) {
     } else {
         console.log('Background: RPC not ready or port not connected. Activity is pending.');
         if (!port && !connectRetryTimeout) {
-            if (isManuallyDisconnected) {
-                console.log('Background: Not attempting to connect to native host because it was manually disconnected.');
-                return;
-            }
+            // Let connectToNativeHost decide if it should connect. It has the full user/temp disconnect logic.
             console.log('Background: Port not connected and no retry scheduled. Attempting to connect native host.');
             connectToNativeHost();
         }
@@ -455,6 +512,7 @@ function reconnectDiscordRpcOnly() {
         try {
             port.postMessage({ type: 'RECONNECT_RPC' });
             console.log('Background: Sent RECONNECT_RPC to native host.');
+            isManuallyDisconnected = false; // Reset the flag when attempting to reconnect
         } catch (e) {
             console.warn('Background: Failed to send RECONNECT_RPC, will reconnect native host instead.', e.message);
             scheduleReconnect();
@@ -465,15 +523,40 @@ function reconnectDiscordRpcOnly() {
 }
 
 function processClearActivity() {
-  currentActivity = null; 
-  pendingActivity = null;
-  currentSongActivity = null; 
-  pausedTimestamp = null; 
+  currentActivity = null;
+ pendingActivity = null;
+  currentSongActivity = null;
+  pausedTimestamp = null;
 
   updateStatus(currentStatus, statusErrorMessage, currentRpcUser, null, nativeHostVersion, nativeHostVersionMismatch);
 
   if (isRpcReady && port) {
-    _sendClearActivityToNativeHost();
+    // Temporarily disconnect from the native host to hide the activity completely
+    if (port) {
+        if (connectRetryTimeout) {
+            clearTimeout(connectRetryTimeout);
+            connectRetryTimeout = null;
+            console.log('Background: Cleared connectRetryTimeout due to pause timeout disconnect.');
+        }
+
+        port.onDisconnect.removeListener(onPortDisconnectHandler);
+
+        try {
+            port.disconnect();
+            console.log('Background: Native port disconnected due to pause timeout.');
+        } catch (e) {
+            console.warn("Background: Error disconnecting port during pause timeout:", e.message);
+        }
+        port = null;
+    }
+
+    isRpcReady = false;
+    isManuallyDisconnected = true; // Mark as manually disconnected to prevent auto-reconnect
+    if (!pendingActivity && currentActivity) {
+        pendingActivity = currentActivity;
+    }
+    // Update status to show current activity as null while paused timeout is active
+    updateStatus('native_connected', 'Paused timeout active', null, null, nativeHostVersion, nativeHostVersionMismatch);
   } else {
     console.log('Background: RPC not ready or port not connected for clear. Will clear when RPC is ready.');
     if (!port && !connectRetryTimeout) {
@@ -484,7 +567,7 @@ function processClearActivity() {
         console.log('Background: Port not connected and no retry scheduled for clear. Attempting to connect native host.');
         connectToNativeHost();
     }
-  }
+ }
 }
 
 function periodicConnectionCheck() {
@@ -525,7 +608,13 @@ function periodicConnectionCheck() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
-    isManuallyDisconnected = false;
+    // a new message from a YTM tab has arrived. If the user has explicitly disconnected, we do nothing.
+    // If we were temporarily disconnected (e.g. pause), this is the signal to potentially reconnect,
+    // so we reset the temporary flag. The actual reconnect is handled in processNewActivity.
+    if (!userDisconnected) {
+        isManuallyDisconnected = false;
+    }
+
     if (message && message.track && message.artist) {
       processNewActivity(message);
       if (sendResponse) sendResponse({ status: "Activity info processed by background" });
@@ -552,6 +641,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
   } else if (message && message.type === 'RECONNECT_NATIVE_HOST') {
       isManuallyDisconnected = false;
+      userDisconnected = false; // User wants to reconnect
       if (port) {
           try {
             port.onDisconnect.removeListener(onPortDisconnectHandler);
@@ -590,7 +680,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     isRpcReady = false;
-    isManuallyDisconnected = true; 
+    isManuallyDisconnected = true;
+    userDisconnected = true; // User has explicitly disconnected
     if (!pendingActivity && currentActivity) {
         pendingActivity = currentActivity;
     }
@@ -639,7 +730,8 @@ chrome.runtime.onInstalled.addListener((details) => {
   console.log('Background: Extension installed or updated:', details.reason);
   currentActivity = null;
   pendingActivity = null;
-  isManuallyDisconnected = false; 
+  isManuallyDisconnected = false;
+  userDisconnected = false;
   currentSongActivity = null;
   pausedTimestamp = null; 
   connectToNativeHost();
@@ -650,7 +742,8 @@ chrome.runtime.onStartup.addListener(() => {
   console.log('Background: Browser started.');
   currentActivity = null;
   pendingActivity = null;
-  isManuallyDisconnected = false; 
+  isManuallyDisconnected = false;
+  userDisconnected = false;
   currentSongActivity = null;
   pausedTimestamp = null; 
   connectToNativeHost();
