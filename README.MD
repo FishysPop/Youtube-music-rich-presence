@@ -6,7 +6,7 @@ Displays your YouTube Music activity as your Discord Rich Presence. This Chrome 
 
 ## ✅ Prerequisites
 
-*   A Chromium-based web browser (e.g., Google Chrome, Microsoft Edge, Brave).
+*   Google Chrome 
 *   The **YouTube Music Rich Presence Native Host** application.
 
 ## 🚀 Installation
