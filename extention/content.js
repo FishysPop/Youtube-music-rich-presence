@@ -138,6 +138,8 @@ let lastSentCurrentTime = null;
 let updateDebounceTimer = null;
 let trackChangeGracePeriodActive = false;
 let trackChangeGracePeriodTimer = null;
+let pauseGracePeriodTimer = null;
+let pauseGracePeriodExpired = false;
 
 let navigationFinishListener = null;
 let playerBarObserver = null;
@@ -154,6 +156,11 @@ function cleanup() {
     trackChangeGracePeriodTimer = null;
   }
   
+  if (pauseGracePeriodTimer) {
+    clearTimeout(pauseGracePeriodTimer);
+    pauseGracePeriodTimer = null;
+  }
+
   if (navigationFinishListener) {
     window.removeEventListener('yt-navigate-finish', navigationFinishListener);
     navigationFinishListener = null;
@@ -208,6 +215,26 @@ function updateTrackInfo(forceSend = false) {
         }
 
         let isPlayingToSend = currentTrackInfo.isPlaying;
+
+        if (currentTrackInfo.isPlaying) {
+            if (pauseGracePeriodTimer) {
+                clearTimeout(pauseGracePeriodTimer);
+                pauseGracePeriodTimer = null;
+            }
+            pauseGracePeriodExpired = false;
+        } else if (lastSentIsPlaying === true) {
+            if (!pauseGracePeriodTimer && !pauseGracePeriodExpired) {
+                pauseGracePeriodTimer = setTimeout(() => {
+                    pauseGracePeriodTimer = null;
+                    pauseGracePeriodExpired = true;
+                    updateTrackInfo(true);
+                }, 1000);
+                isPlayingToSend = true;
+            } else if (pauseGracePeriodTimer) {
+                isPlayingToSend = true;
+            }
+        }
+
         if (trackChangeGracePeriodActive && !currentTrackInfo.isPlaying) {
             isPlayingToSend = true;
         }
@@ -248,6 +275,11 @@ function updateTrackInfo(forceSend = false) {
             lastSentIsPlaying = null;
             clearTimeout(trackChangeGracePeriodTimer);
             trackChangeGracePeriodActive = false;
+            if (pauseGracePeriodTimer) {
+                clearTimeout(pauseGracePeriodTimer);
+                pauseGracePeriodTimer = null;
+            }
+            pauseGracePeriodExpired = false;
         } else {
         }
     }
@@ -266,6 +298,11 @@ navigationFinishListener = () => {
     lastSentCurrentTime = null;
     clearTimeout(trackChangeGracePeriodTimer);
     trackChangeGracePeriodActive = false;
+    if (pauseGracePeriodTimer) {
+        clearTimeout(pauseGracePeriodTimer);
+        pauseGracePeriodTimer = null;
+    }
+    pauseGracePeriodExpired = false;
     updateTrackInfo(true);
 };
 
