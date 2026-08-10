@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Music Rich Presence",
-  "version": "1.5",
+  "version": "1.6",
   "description": "Displays your current YouTube Music activity on Discord via a native helper application.",
   "icons": {
     "16": "icon.png",
@@ -9,12 +9,13 @@
     "48": "icon.png",
     "128": "icon.png"
   },
-  "permissions": [
-    "activeTab",
-    "scripting",
-    "storage",
-    "nativeMessaging"
-  ],
+    "permissions": [
+      "activeTab",
+      "scripting",
+      "storage",
+      "nativeMessaging",
+      "alarms"
+    ],
   "host_permissions": [
     "https://music.youtube.com/*"
   ],

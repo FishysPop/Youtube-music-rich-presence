@@ -20,12 +20,56 @@ let isRpcReady = false;
 let pendingActivity = null;
 let isManuallyDisconnected = false; // Used for temporary disconnects like pause timeouts
 let userDisconnected = false; // Tracks if the user has explicitly disconnected via the UI
+let isPauseHidden = false;
+let pauseHideTargetTime = null;
 let nativeHostVersion = null;
 let nativeHostVersionMismatch = false;
 
 let currentSongActivity = null;
 let pausedTimestamp = null;
-let pauseTimeoutId = null; 
+let pauseTimeoutId = null;
+
+chrome.storage.local.get({
+    userDisconnected: false,
+    isPauseHidden: false,
+    pausedTimestamp: null,
+    pauseHideTargetTime: null
+}, (res) => {
+    userDisconnected = res.userDisconnected;
+    isPauseHidden = res.isPauseHidden;
+    pausedTimestamp = res.pausedTimestamp;
+    pauseHideTargetTime = res.pauseHideTargetTime;
+});
+
+if (chrome.alarms) {
+    chrome.alarms.onAlarm.addListener((alarm) => {
+        if (alarm.name === 'pauseHideAlarm') {
+            console.log('Background: Pause hide alarm triggered.');
+            handlePauseHideTimeout();
+        } else if (alarm.name === 'periodicCheckAlarm') {
+            console.log('Background: Periodic check alarm triggered.');
+            periodicConnectionCheck();
+        }
+    });
+}
+
+function setupPeriodicAlarm() {
+    if (chrome.alarms) {
+        chrome.alarms.get('periodicCheckAlarm', (alarm) => {
+            if (!alarm) {
+                chrome.alarms.create('periodicCheckAlarm', { periodInMinutes: 5 });
+            }
+        });
+    }
+}
+setupPeriodicAlarm();
+
+function handlePauseHideTimeout() {
+    isPauseHidden = true;
+    pauseHideTargetTime = null;
+    chrome.storage.local.set({ isPauseHidden: true, pauseHideTargetTime: null });
+    processClearActivity(true);
+}
 /**
  * Updates the internal state and notifies the popup.
  * @param {string} newStatus - The new primary status.
@@ -161,7 +205,8 @@ const onPortDisconnectHandler = () => {
     }
     port = null;
     isRpcReady = false;
-    updateStatus('disconnected', disconnectMsg, null, pendingActivity || currentActivity, null, false); // Clear version and reset mismatch on disconnection
+    const isHostNotFound = lastError && (lastError.message.includes("not found") || lastError.message.includes("forbidden"));
+    updateStatus(isHostNotFound ? 'error' : 'disconnected', disconnectMsg, null, pendingActivity || currentActivity, null, false);
 
     chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
         if (result.autoReconnectEnabled) {
@@ -361,11 +406,39 @@ function getPauseTimeout() {
 }
 
 function processNewActivity(message) {
+    if (message.isPlaying) {
+        if (isPauseHidden) {
+            isPauseHidden = false;
+            chrome.storage.local.set({ isPauseHidden: false, pauseHideTargetTime: null });
+        }
+        if (chrome.alarms) {
+            chrome.alarms.clear('pauseHideAlarm');
+        }
+        if (pauseTimeoutId) {
+            clearTimeout(pauseTimeoutId);
+            pauseTimeoutId = null;
+        }
+        if (isManuallyDisconnected && !userDisconnected) {
+            isManuallyDisconnected = false;
+            console.log('Background: Playback active/resumed, resetting temporary disconnect.');
+        }
+    } else {
+        if (isPauseHidden && currentSongActivity && currentSongActivity.details === message.track && currentSongActivity.state === message.artist) {
+            console.log('Background: Track is paused and pause timeout active; ignoring update to stay hidden.');
+            return;
+        }
+        if (pauseHideTargetTime && Date.now() >= pauseHideTargetTime && !isPauseHidden) {
+            console.log('Background: Pause timeout elapsed while inactive; executing hide.');
+            handlePauseHideTimeout();
+            return;
+        }
+    }
+
     if (!currentSongActivity || currentSongActivity.details !== message.track || currentSongActivity.state !== message.artist) {
         currentSongActivity = {
             details: message.track,
             state: message.artist,
-            largeImageKey: message.albumArtUrl ? message.albumArtUrl.replace(/w\d+-h\d+/, 'w512-h512') : null, // Increase resolution
+            largeImageKey: message.albumArtUrl ? message.albumArtUrl.replace(/w\d+-h\d+/, 'w512-h512') : null,
             largeImageText: message.albumArtUrl ? `${message.track} - ${message.artist}` : 'YouTube Music',
             smallImageKey: 'play',
             smallImageText: 'Playing',
@@ -379,15 +452,17 @@ function processNewActivity(message) {
         };
         currentSongActivity.startTimestamp = Math.floor(Date.now()) - (message.currentTime * 1000);
         pausedTimestamp = null;
-        
-        // Clear any existing timeout when a new song starts
+        pauseHideTargetTime = null;
+        isPauseHidden = false;
+        chrome.storage.local.set({ pausedTimestamp: null, pauseHideTargetTime: null, isPauseHidden: false });
+        if (chrome.alarms) {
+            chrome.alarms.clear('pauseHideAlarm');
+        }
         if (pauseTimeoutId) {
             clearTimeout(pauseTimeoutId);
             pauseTimeoutId = null;
         }
         
-        // If we were disconnected due to a pause timeout, reconnect now.
-        // Do not reconnect if the user has explicitly disconnected.
         if (isManuallyDisconnected && !userDisconnected) {
             isManuallyDisconnected = false;
             console.log('Background: New song detected, reconnecting after temporary disconnect.');
@@ -408,36 +483,48 @@ function processNewActivity(message) {
         currentSongActivity.smallImageKey = 'https://cdn.rcd.gg/PreMiD/resources/pause.png';
         currentSongActivity.smallImageText = 'Paused';
         
-        // Set timeout to clear activity after pause timeout
         getPauseTimeout().then((timeoutMinutes) => {
             if (pauseTimeoutId) {
                 clearTimeout(pauseTimeoutId);
                 pauseTimeoutId = null;
             }
+            if (chrome.alarms) {
+                chrome.alarms.clear('pauseHideAlarm');
+            }
             
-            // Only set the timeout if the value is greater than 0 (-1 means disabled)
             if (timeoutMinutes > 0) {
+                const targetTime = Date.now() + (timeoutMinutes * 60 * 1000);
+                pauseHideTargetTime = targetTime;
+                chrome.storage.local.set({ pausedTimestamp, pauseHideTargetTime: targetTime });
+                if (chrome.alarms) {
+                    chrome.alarms.create('pauseHideAlarm', { when: targetTime });
+                }
                 pauseTimeoutId = setTimeout(() => {
                     console.log(`Background: Paused for ${timeoutMinutes} minutes, hiding activity`);
-                    processClearActivity();
+                    handlePauseHideTimeout();
                 }, timeoutMinutes * 60 * 1000);
+            } else {
+                chrome.storage.local.set({ pausedTimestamp, pauseHideTargetTime: null });
             }
         });
     } else if (message.isPlaying && pausedTimestamp !== null) {
         const pauseDuration = Math.floor(Date.now()) - pausedTimestamp;
         currentSongActivity.startTimestamp += pauseDuration;
         pausedTimestamp = null;
+        pauseHideTargetTime = null;
+        isPauseHidden = false;
+        chrome.storage.local.set({ pausedTimestamp: null, pauseHideTargetTime: null, isPauseHidden: false });
         currentSongActivity.smallImageKey = 'play';
         currentSongActivity.smallImageText = 'Playing';
         
-        // Clear the pause timeout when playback resumes
         if (pauseTimeoutId) {
             clearTimeout(pauseTimeoutId);
             pauseTimeoutId = null;
         }
+        if (chrome.alarms) {
+            chrome.alarms.clear('pauseHideAlarm');
+        }
         
-        // If we were disconnected due to a pause timeout, reconnect now.
-        // Do not reconnect if the user has explicitly disconnected.
         if (isManuallyDisconnected && !userDisconnected) {
             isManuallyDisconnected = false;
             console.log('Background: Playback resumed, reconnecting after temporary disconnect.');
@@ -459,8 +546,6 @@ function processNewActivity(message) {
     } else {
         console.log('Background: RPC not ready or port not connected. Activity is pending.');
         if (!port && !connectRetryTimeout) {
-            // Let connectToNativeHost decide if it should connect. It has the full user/temp disconnect logic.
-            console.log('Background: Port not connected and no retry scheduled. Attempting to connect native host.');
             connectToNativeHost();
         }
     }
@@ -512,7 +597,7 @@ function reconnectDiscordRpcOnly() {
         try {
             port.postMessage({ type: 'RECONNECT_RPC' });
             console.log('Background: Sent RECONNECT_RPC to native host.');
-            isManuallyDisconnected = false; // Reset the flag when attempting to reconnect
+            isManuallyDisconnected = false;
         } catch (e) {
             console.warn('Background: Failed to send RECONNECT_RPC, will reconnect native host instead.', e.message);
             scheduleReconnect();
@@ -522,43 +607,49 @@ function reconnectDiscordRpcOnly() {
     }
 }
 
-function processClearActivity() {
+function processClearActivity(isPauseTimeout = false) {
   currentActivity = null;
- pendingActivity = null;
-  currentSongActivity = null;
-  pausedTimestamp = null;
+  pendingActivity = null;
+  if (!isPauseTimeout) {
+      currentSongActivity = null;
+      pausedTimestamp = null;
+      pauseHideTargetTime = null;
+      isPauseHidden = false;
+      chrome.storage.local.set({ pausedTimestamp: null, pauseHideTargetTime: null, isPauseHidden: false });
+      if (chrome.alarms) {
+          chrome.alarms.clear('pauseHideAlarm');
+      }
+  }
 
   updateStatus(currentStatus, statusErrorMessage, currentRpcUser, null, nativeHostVersion, nativeHostVersionMismatch);
 
   if (isRpcReady && port) {
-    // Temporarily disconnect from the native host to hide the activity completely
     if (port) {
         if (connectRetryTimeout) {
             clearTimeout(connectRetryTimeout);
             connectRetryTimeout = null;
-            console.log('Background: Cleared connectRetryTimeout due to pause timeout disconnect.');
+            console.log('Background: Cleared connectRetryTimeout due to clear activity.');
         }
 
         port.onDisconnect.removeListener(onPortDisconnectHandler);
 
         try {
             port.disconnect();
-            console.log('Background: Native port disconnected due to pause timeout.');
+            console.log('Background: Native port disconnected on clear activity.');
         } catch (e) {
-            console.warn("Background: Error disconnecting port during pause timeout:", e.message);
+            console.warn("Background: Error disconnecting port during clear activity:", e.message);
         }
         port = null;
     }
 
     isRpcReady = false;
-    isManuallyDisconnected = true; // Mark as manually disconnected to prevent auto-reconnect
+    isManuallyDisconnected = true;
     if (!pendingActivity && currentActivity) {
         pendingActivity = currentActivity;
     }
-    // Update status to show current activity as null while paused timeout is active
-    updateStatus('native_connected', 'Paused timeout active', null, null, nativeHostVersion, nativeHostVersionMismatch);
+    updateStatus('native_connected', isPauseTimeout ? 'Paused timeout active' : undefined, null, null, nativeHostVersion, nativeHostVersionMismatch);
   } else {
-    console.log('Background: RPC not ready or port not connected for clear. Will clear when RPC is ready.');
+    console.log('Background: RPC not ready or port not connected for clear.');
     if (!port && !connectRetryTimeout) {
         if (isManuallyDisconnected) {
             console.log('Background: Not attempting to connect to native host because it was manually disconnected.');
@@ -567,14 +658,14 @@ function processClearActivity() {
         console.log('Background: Port not connected and no retry scheduled for clear. Attempting to connect native host.');
         connectToNativeHost();
     }
- }
+  }
 }
 
 function periodicConnectionCheck() {
-    console.log(`Background (Periodic Check): Status: ${currentStatus}, Port: ${!!port}, RPC Ready: ${isRpcReady}, Retry Scheduled: ${!!connectRetryTimeout}, Manually Disconnected: ${isManuallyDisconnected}`);
+    console.log(`Background (Periodic Check): Status: ${currentStatus}, Port: ${!!port}, RPC Ready: ${isRpcReady}, Retry Scheduled: ${!!connectRetryTimeout}, Manually Disconnected: ${isManuallyDisconnected}, PauseHidden: ${isPauseHidden}, UserDisconnected: ${userDisconnected}`);
 
-    if (isManuallyDisconnected) {
-        console.log('Background (Periodic Check): Skipping periodic check due to manual disconnect.');
+    if (userDisconnected || isPauseHidden || isManuallyDisconnected) {
+        console.log('Background (Periodic Check): Skipping periodic check due to manual disconnect or pause hide.');
         return;
     }
 
@@ -608,11 +699,10 @@ function periodicConnectionCheck() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
-    // a new message from a YTM tab has arrived. If the user has explicitly disconnected, we do nothing.
-    // If we were temporarily disconnected (e.g. pause), this is the signal to potentially reconnect,
-    // so we reset the temporary flag. The actual reconnect is handled in processNewActivity.
-    if (!userDisconnected) {
+    if (!userDisconnected && message && message.isPlaying) {
         isManuallyDisconnected = false;
+        isPauseHidden = false;
+        chrome.storage.local.set({ isPauseHidden: false });
     }
 
     if (message && message.track && message.artist) {
@@ -641,7 +731,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
   } else if (message && message.type === 'RECONNECT_NATIVE_HOST') {
       isManuallyDisconnected = false;
-      userDisconnected = false; // User wants to reconnect
+      userDisconnected = false;
+      isPauseHidden = false;
+      chrome.storage.local.set({ userDisconnected: false, isPauseHidden: false, pauseHideTargetTime: null });
+      if (chrome.alarms) {
+          chrome.alarms.clear('pauseHideAlarm');
+      }
       if (port) {
           try {
             port.onDisconnect.removeListener(onPortDisconnectHandler);
@@ -681,7 +776,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     isRpcReady = false;
     isManuallyDisconnected = true;
-    userDisconnected = true; // User has explicitly disconnected
+    userDisconnected = true;
+    chrome.storage.local.set({ userDisconnected: true });
     if (!pendingActivity && currentActivity) {
         pendingActivity = currentActivity;
     }
@@ -732,8 +828,11 @@ chrome.runtime.onInstalled.addListener((details) => {
   pendingActivity = null;
   isManuallyDisconnected = false;
   userDisconnected = false;
+  isPauseHidden = false;
   currentSongActivity = null;
-  pausedTimestamp = null; 
+  pausedTimestamp = null;
+  chrome.storage.local.set({ userDisconnected: false, isPauseHidden: false, pausedTimestamp: null, pauseHideTargetTime: null });
+  setupPeriodicAlarm();
   connectToNativeHost();
   reInjectContentScripts(); 
 });
@@ -742,18 +841,29 @@ chrome.runtime.onStartup.addListener(() => {
   console.log('Background: Browser started.');
   currentActivity = null;
   pendingActivity = null;
-  isManuallyDisconnected = false;
-  userDisconnected = false;
-  currentSongActivity = null;
-  pausedTimestamp = null; 
-  connectToNativeHost();
+  setupPeriodicAlarm();
+  chrome.storage.local.get({
+    userDisconnected: false,
+    isPauseHidden: false,
+    pausedTimestamp: null,
+    pauseHideTargetTime: null
+  }, (res) => {
+    userDisconnected = res.userDisconnected;
+    isPauseHidden = res.isPauseHidden;
+    pausedTimestamp = res.pausedTimestamp;
+    pauseHideTargetTime = res.pauseHideTargetTime;
+    if (!userDisconnected && !isPauseHidden) {
+      isManuallyDisconnected = false;
+      connectToNativeHost();
+    }
+  });
   reInjectContentScripts(); 
 });
 
+setupPeriodicAlarm();
 connectToNativeHost();
 
 if (periodicCheckIntervalId) {
     clearInterval(periodicCheckIntervalId);
 }
-periodicCheckIntervalId = setInterval(periodicConnectionCheck, PERIODIC_CHECK_INTERVAL);
 console.log('Background: YouTube Music Rich Presence background script initialized.');

@@ -145,8 +145,8 @@ if (pauseTimeoutInput) {
         reconnectButton.textContent = "Disconnect";
         reconnectButton.title = "Disconnect from Native Host and Discord";
         break;
-  case "error": // This signifies a critical error with the native host itself
-    nativeHostStatusText = "Error";
+  case "error":
+    nativeHostStatusText = (errorMessage && (errorMessage.toLowerCase().includes("not found") || errorMessage.toLowerCase().includes("forbidden"))) ? "Not Installed" : "Error";
     rpcStatusText = "Disconnected";
     nativeHostStatusClass = "error";
     rpcStatusClass = "disconnected";
@@ -179,31 +179,36 @@ if (pauseTimeoutInput) {
     currentSongElement.textContent = songInfoText;
 
     if (nativeHostWarningElement) {
-      // Only show version mismatch warning if host version information is available and indicates a mismatch
-      // Only show version mismatch warning if host version information is available and indicates a mismatch
-      // AND we are not currently in a "connecting" state (to prevent flashing during reconnection)
-      if (response.nativeHostVersion !== undefined && response.nativeHostVersionMismatch && status !== "connecting_native") {
-        let warningMessage = "Native Host version mismatch. Please update your native host application.";
-        if (response.nativeHostVersion) {
-            warningMessage += ` Current: ${response.nativeHostVersion}. Required: ${REQUIRED_NATIVE_HOST_VERSION}.`;
-        }
-        nativeHostWarningElement.innerHTML = `<strong>Warning:</strong> ${warningMessage} <a href="#" id="nativeHostUpdateLink">Click here for instructions.</a>`;
+      const isHostNotFound = errorMessage && (errorMessage.toLowerCase().includes("not found") || errorMessage.toLowerCase().includes("forbidden"));
+      if (isHostNotFound && status !== "connecting_native") {
+        nativeHostWarningElement.innerHTML = `<strong>Warning:</strong> Native host application is not installed. <a href="#" id="nativeHostUpdateLink" style="color: #9ec5fe; font-weight: 600; text-decoration: underline;">Download Installer</a>`;
         nativeHostWarningElement.style.display = 'block';
-        // Add event listener for the update link
         const updateLink = document.getElementById("nativeHostUpdateLink");
         if (updateLink) {
           updateLink.addEventListener("click", (e) => {
             e.preventDefault();
-            // Open a new tab with instructions or a download link
-            chrome.tabs.create({ url: "https://github.com/FishysPop/Youtube-music-rich-presence/releases" }); // Replace with actual update instructions URL
+            chrome.tabs.create({ url: "https://github.com/FishysPop/Youtube-music-rich-presence/releases" });
+          });
+        }
+      } else if (response.nativeHostVersion !== undefined && response.nativeHostVersionMismatch && status !== "connecting_native") {
+        let warningMessage = "Native Host version mismatch. Please update your native host application.";
+        if (response.nativeHostVersion) {
+            warningMessage += ` Current: ${response.nativeHostVersion}. Required: ${REQUIRED_NATIVE_HOST_VERSION}.`;
+        }
+        nativeHostWarningElement.innerHTML = `<strong>Warning:</strong> ${warningMessage} <a href="#" id="nativeHostUpdateLink" style="color: #9ec5fe; font-weight: 600; text-decoration: underline;">Click here for instructions.</a>`;
+        nativeHostWarningElement.style.display = 'block';
+        const updateLink = document.getElementById("nativeHostUpdateLink");
+        if (updateLink) {
+          updateLink.addEventListener("click", (e) => {
+            e.preventDefault();
+            chrome.tabs.create({ url: "https://github.com/FishysPop/Youtube-music-rich-presence/releases" });
           });
         }
       } else {
-        // Ensure warning is hidden if not explicitly for version mismatch or if connecting
         nativeHostWarningElement.style.display = 'none';
       }
-}
-    } // This brace closes the updatePopupUI function.
+    }
+  } // This brace closes the updatePopupUI function.
 
   // Define REQUIRED_NATIVE_HOST_VERSION in popup.js as well for comparison
   const REQUIRED_NATIVE_HOST_VERSION = "1.0.0"; // Must match the version in background.js

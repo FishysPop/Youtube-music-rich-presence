@@ -48,7 +48,7 @@ process.stdin.on('data', (chunk) => {
                         clearActivity();
                         break;
                     case 'RECONNECT_RPC':
-                        connectRpc();
+                        connectRpc(true);
                         break;
                     default:
                         sendToExtension({ type: 'NATIVE_HOST_WARNING', message: `Unknown message type: ${message.type}` });
@@ -68,69 +68,85 @@ process.stdin.on('error', (err) => {
     sendToExtension({ type: 'NATIVE_HOST_ERROR', message: `Stdin Error: ${err.message}` });
 });
 
-const rpc = new RPC.Client({
-    clientId: clientId
-});
+let rpc = null;
 let rpcReady = false;
+let isConnecting = false;
 
-rpc.on('ready', () => {
-    rpcReady = true;
-    sendToExtension({
-        type: 'RPC_STATUS_UPDATE',
-        status: 'connected',
-        user: { username: rpc.user.username, discriminator: rpc.user.discriminator }
+function createRpcClient() {
+    if (rpc) {
+        try {
+            if (rpc.user && typeof rpc.user.destroy === 'function') {
+                rpc.user.destroy().catch(() => {});
+            }
+        } catch (e) {}
+    }
+
+    rpc = new RPC.Client({ clientId: clientId });
+    rpcReady = false;
+
+    rpc.on('ready', () => {
+        rpcReady = true;
+        isConnecting = false;
+        sendToExtension({
+            type: 'RPC_STATUS_UPDATE',
+            status: 'connected',
+            user: { username: rpc.user.username, discriminator: rpc.user.discriminator }
+        });
+
+        const queue = messageQueue.filter(msg => msg.type === 'SET_ACTIVITY' || msg.type === 'CLEAR_ACTIVITY');
+        messageQueue = [];
+        queue.forEach(msg => {
+            switch (msg.type) {
+                case 'SET_ACTIVITY':
+                    setActivity(msg.data);
+                    break;
+                case 'CLEAR_ACTIVITY':
+                    clearActivity();
+                    break;
+            }
+        });
     });
 
-    // Process queued messages, ensuring only SET_ACTIVITY and CLEAR_ACTIVITY are handled here
-    const queue = messageQueue.filter(msg => msg.type === 'SET_ACTIVITY' || msg.type === 'CLEAR_ACTIVITY');
-    messageQueue = []; // Clear the queue after processing
-    queue.forEach(msg => {
-        switch (msg.type) {
-            case 'SET_ACTIVITY':
-                setActivity(msg.data);
-                break;
-            case 'CLEAR_ACTIVITY':
-                clearActivity();
-                break;
-        }
+    rpc.on('error', (err) => {
+        rpcReady = false;
+        isConnecting = false;
+        sendToExtension({ type: 'RPC_ERROR', message: `RPC Error: ${err.message}` });
     });
-});
 
-rpc.on('error', (err) => {
-    rpcReady = false;
-    sendToExtension({ type: 'RPC_ERROR', message: `RPC Error: ${err.message}` });
-});
+    rpc.on('disconnected', () => {
+        rpcReady = false;
+        isConnecting = false;
+        sendToExtension({ type: 'RPC_STATUS_UPDATE', status: 'disconnected' });
+    });
+}
 
-rpc.on('disconnected', () => {
-    rpcReady = false;
-    sendToExtension({ type: 'RPC_STATUS_UPDATE', status: 'disconnected' });
-});
+async function connectRpc(forceRecreate = false) {
+    if (rpcReady && !forceRecreate) return;
+    if (isConnecting && !forceRecreate) return;
 
-async function connectRpc() {
-    if (rpcReady) return;
+    isConnecting = true;
+    if (!rpc || forceRecreate) {
+        createRpcClient();
+    }
+
     try {
-        // Add explicit timeout configuration to the RPC login process
         await rpc.login({
             clientId,
             timeout: RPC_LOGIN_TIMEOUT
         });
     } catch (err) {
-        // Enhance error classification to better handle timeout errors
+        isConnecting = false;
         let errorType = 'UNKNOWN_ERROR';
         let errorMessage = err.message;
         
-        // Check if this is a timeout error
         if (err.message && (err.message.includes('timeout') || err.message.includes('TIMED_OUT') || err.message.includes('ETIMEDOUT'))) {
             errorType = 'TIMEOUT_ERROR';
             errorMessage = `Connection timed out after ${RPC_LOGIN_TIMEOUT/1000} seconds`;
-        }
-        // Check if this is an authentication error
-        else if (err.message && (err.message.includes('401') || err.message.includes('Unauthorized') || err.message.includes('AUTHENTICATION_FAILED'))) {
+        } else if (err.message && (err.message.includes('401') || err.message.includes('Unauthorized') || err.message.includes('AUTHENTICATION_FAILED'))) {
             errorType = 'AUTHENTICATION_ERROR';
             errorMessage = 'Authentication failed - check client ID and Discord credentials';
         }
         
-        // Add more detailed error logging for connection failures
         console.error(`RPC Login Failed [${errorType}]:`, {
             errorType,
             errorMessage: err.message,
