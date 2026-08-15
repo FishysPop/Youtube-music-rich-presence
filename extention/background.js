@@ -24,6 +24,8 @@ let isPauseHidden = false;
 let pauseHideTargetTime = null;
 let nativeHostVersion = null;
 let nativeHostVersionMismatch = false;
+let nativeHostInstalled = null;
+let isVerifyingInstall = false;
 
 let currentSongActivity = null;
 let pausedTimestamp = null;
@@ -33,12 +35,18 @@ chrome.storage.local.get({
     userDisconnected: false,
     isPauseHidden: false,
     pausedTimestamp: null,
-    pauseHideTargetTime: null
+    pauseHideTargetTime: null,
+    nativeHostInstalled: null,
+    nativeHostVersion: null,
+    nativeHostVersionMismatch: false
 }, (res) => {
     userDisconnected = res.userDisconnected;
     isPauseHidden = res.isPauseHidden;
     pausedTimestamp = res.pausedTimestamp;
     pauseHideTargetTime = res.pauseHideTargetTime;
+    nativeHostInstalled = res.nativeHostInstalled;
+    if (res.nativeHostVersion) nativeHostVersion = res.nativeHostVersion;
+    nativeHostVersionMismatch = res.nativeHostVersionMismatch;
 });
 
 if (chrome.alarms) {
@@ -114,14 +122,15 @@ function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, 
         rpcUser: currentRpcUser,
         currentActivity: activityForThisPopupUpdate,
         nativeHostVersion: nativeHostVersion,
-        nativeHostVersionMismatch: nativeHostVersionMismatch
+        nativeHostVersionMismatch: nativeHostVersionMismatch,
+        nativeHostInstalled: nativeHostInstalled
     }).catch(err => {
         if (!err.message.includes("Receiving end does not exist")) {
             console.warn("Background: Error sending STATUS_UPDATE to popup, likely no popup open:", err.message);
         }
     });
 
-    if (newStatus === 'disconnected' || newStatus === 'error') {
+    if (newStatus === 'error') {
         chrome.action.setBadgeText({ text: '!' });
         chrome.action.setBadgeBackgroundColor({ color: '#FF0000' }); 
     } else if (newStatus === 'connecting_native') {
@@ -179,6 +188,10 @@ function handlePortError(error, activityContextIfSet) {
                     console.log('Background: Auto-reconnect skipped due to manual disconnect.');
                     return;
                 }
+                if (!currentSongActivity && !pendingActivity) {
+                    console.log('Background: Auto-reconnect skipped because no music is playing.');
+                    return;
+                }
                 console.log('Background: Auto-reconnect ON. Scheduling native host reconnect due to port error.');
                 scheduleReconnect();
             } else {
@@ -206,12 +219,20 @@ const onPortDisconnectHandler = () => {
     port = null;
     isRpcReady = false;
     const isHostNotFound = lastError && (lastError.message.includes("not found") || lastError.message.includes("forbidden"));
+    if (isHostNotFound) {
+        nativeHostInstalled = false;
+        chrome.storage.local.set({ nativeHostInstalled: false });
+    }
     updateStatus(isHostNotFound ? 'error' : 'disconnected', disconnectMsg, null, pendingActivity || currentActivity, null, false);
 
     chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
         if (result.autoReconnectEnabled) {
             if (isManuallyDisconnected) {
                 console.log('Background: Auto-reconnect skipped due to manual disconnect.');
+                return;
+            }
+            if (!currentSongActivity && !pendingActivity) {
+                console.log('Background: Auto-reconnect skipped because no music is playing.');
                 return;
             }
             console.log('Background: Auto-reconnect ON. Will attempt to reconnect to native host (onPortDisconnect).');
@@ -254,7 +275,7 @@ function connectToNativeHost() {
         connectRetryTimeout = null;
     }
 
-    port.onMessage.addListener((message) => {
+        port.onMessage.addListener((message) => {
         if (message.type === 'NATIVE_HOST_STARTED') {
             console.log('Background: Native host confirmed it has started. Waiting for RPC status.');
             reconnectAttempts = 0;
@@ -269,7 +290,32 @@ function connectToNativeHost() {
                 console.warn('Background: Native host version not provided in NATIVE_HOST_STARTED message. Assuming outdated.');
                 versionMismatch = true; 
             }
+            nativeHostInstalled = true;
+            nativeHostVersion = message.version || null;
+            nativeHostVersionMismatch = versionMismatch;
+            chrome.storage.local.set({
+                nativeHostInstalled: true,
+                nativeHostVersion: message.version || null,
+                nativeHostVersionMismatch: versionMismatch
+            });
             updateStatus('native_connected', null, null, pendingActivity || currentActivity, message.version, versionMismatch);
+
+            if (isVerifyingInstall) {
+                isVerifyingInstall = false;
+                if (!currentSongActivity && !pendingActivity) {
+                    setTimeout(() => {
+                        if (!currentSongActivity && !pendingActivity && port) {
+                            try {
+                                port.onDisconnect.removeListener(onPortDisconnectHandler);
+                                port.disconnect();
+                            } catch (e) {}
+                            port = null;
+                            isRpcReady = false;
+                            updateStatus('disconnected', null, null, null, message.version, versionMismatch);
+                        }
+                    }, 500);
+                }
+            }
         } else if (message.type === 'RPC_STATUS_UPDATE') {
             if (message.status === 'connected') {
                 console.log('Background: Native host reported Discord RPC is ready (connected). User:', message.user);
@@ -295,8 +341,12 @@ function connectToNativeHost() {
                             console.log('Background: Auto-reconnect skipped due to manual disconnect.');
                             return;
                         }
+                        if (!currentSongActivity && !pendingActivity) {
+                            console.log('Background: Auto-reconnect skipped because no music is playing.');
+                            return;
+                        }
                         console.log('Background: Auto-reconnect ON. Scheduling RPC reconnect due to RPC disconnect.');
-                        scheduleReconnect(reconnectDiscordRpcOnly); // Use the backoff mechanism
+                        scheduleReconnect(reconnectDiscordRpcOnly);
                     } else {
                         console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (RPC disconnect).');
                     }
@@ -313,19 +363,21 @@ function connectToNativeHost() {
                         console.log('Background: Auto-reconnect skipped due to manual disconnect.');
                         return;
                     }
+                    if (!currentSongActivity && !pendingActivity) {
+                        console.log('Background: Auto-reconnect skipped because no music is playing.');
+                        return;
+                    }
                     console.log('Background: Auto-reconnect ON. Scheduling RPC reconnect due to RPC error.');
                     if (message.errorType === 'AUTHENTICATION_ERROR') {
                         console.log('Background: Authentication error detected. Using longer retry delays.');
-                        scheduleReconnect(reconnectDiscordRpcOnly, true)
+                        scheduleReconnect(reconnectDiscordRpcOnly, true);
                     } else if (message.errorType === 'TIMEOUT_ERROR') {
                         console.log('Background: Timeout error detected. Using aggressive retry strategy.');
                         scheduleReconnectWithAggressiveBackoff(reconnectDiscordRpcOnly);
                     } else {
                         console.log('Background: Other RPC error detected. Using standard backoff strategy.');
-scheduleReconnect(reconnectDiscordRpcOnly); 
-                        
+                        scheduleReconnect(reconnectDiscordRpcOnly); 
                     }
-                    
                 } else {
                     console.log('Background: Auto-reconnect OFF. Not scheduling reconnect (RPC error).');
                 }
@@ -532,7 +584,7 @@ function processNewActivity(message) {
         }
     }
 
-    if (message.isPlaying && message.duration) {
+    if (message.isPlaying && message.duration && message.duration > 0) {
         currentSongActivity.endTimestamp = currentSongActivity.startTimestamp + (message.duration * 1000);
     } else if (!message.isPlaying && currentSongActivity && currentSongActivity.endTimestamp) {
         delete currentSongActivity.endTimestamp;
@@ -621,44 +673,27 @@ function processClearActivity(isPauseTimeout = false) {
       }
   }
 
-  updateStatus(currentStatus, statusErrorMessage, currentRpcUser, null, nativeHostVersion, nativeHostVersionMismatch);
+  if (port) {
+      if (connectRetryTimeout) {
+          clearTimeout(connectRetryTimeout);
+          connectRetryTimeout = null;
+          console.log('Background: Cleared connectRetryTimeout due to clear activity.');
+      }
 
-  if (isRpcReady && port) {
-    if (port) {
-        if (connectRetryTimeout) {
-            clearTimeout(connectRetryTimeout);
-            connectRetryTimeout = null;
-            console.log('Background: Cleared connectRetryTimeout due to clear activity.');
-        }
+      port.onDisconnect.removeListener(onPortDisconnectHandler);
 
-        port.onDisconnect.removeListener(onPortDisconnectHandler);
-
-        try {
-            port.disconnect();
-            console.log('Background: Native port disconnected on clear activity.');
-        } catch (e) {
-            console.warn("Background: Error disconnecting port during clear activity:", e.message);
-        }
-        port = null;
-    }
-
-    isRpcReady = false;
-    isManuallyDisconnected = true;
-    if (!pendingActivity && currentActivity) {
-        pendingActivity = currentActivity;
-    }
-    updateStatus('native_connected', isPauseTimeout ? 'Paused timeout active' : undefined, null, null, nativeHostVersion, nativeHostVersionMismatch);
-  } else {
-    console.log('Background: RPC not ready or port not connected for clear.');
-    if (!port && !connectRetryTimeout) {
-        if (isManuallyDisconnected) {
-            console.log('Background: Not attempting to connect to native host because it was manually disconnected.');
-            return;
-        }
-        console.log('Background: Port not connected and no retry scheduled for clear. Attempting to connect native host.');
-        connectToNativeHost();
-    }
+      try {
+          port.disconnect();
+          console.log('Background: Native port disconnected on clear activity.');
+      } catch (e) {
+          console.warn("Background: Error disconnecting port during clear activity:", e.message);
+      }
+      port = null;
   }
+
+  isRpcReady = false;
+  isManuallyDisconnected = true;
+  updateStatus('disconnected', isPauseTimeout ? 'Paused timeout active' : undefined, null, null, nativeHostVersion, nativeHostVersionMismatch);
 }
 
 function periodicConnectionCheck() {
@@ -666,6 +701,11 @@ function periodicConnectionCheck() {
 
     if (userDisconnected || isPauseHidden || isManuallyDisconnected) {
         console.log('Background (Periodic Check): Skipping periodic check due to manual disconnect or pause hide.');
+        return;
+    }
+
+    if (!currentSongActivity && !pendingActivity) {
+        console.log('Background (Periodic Check): Skipping periodic check because no song is playing.');
         return;
     }
 
@@ -725,7 +765,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               rpcUser: currentRpcUser,
               currentActivity: activityForPopup,
               nativeHostVersion: nativeHostVersion,
-              nativeHostVersionMismatch: nativeHostVersionMismatch
+              nativeHostVersionMismatch: nativeHostVersionMismatch,
+              nativeHostInstalled: nativeHostInstalled
           });
       }
       return true;
@@ -822,6 +863,12 @@ function reInjectContentScripts() {
     }
   });
 }
+
+function verifyNativeHostOnInstall() {
+  isVerifyingInstall = true;
+  connectToNativeHost();
+}
+
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('Background: Extension installed or updated:', details.reason);
   currentActivity = null;
@@ -833,7 +880,7 @@ chrome.runtime.onInstalled.addListener((details) => {
   pausedTimestamp = null;
   chrome.storage.local.set({ userDisconnected: false, isPauseHidden: false, pausedTimestamp: null, pauseHideTargetTime: null });
   setupPeriodicAlarm();
-  connectToNativeHost();
+  verifyNativeHostOnInstall();
   reInjectContentScripts(); 
 });
 
@@ -852,16 +899,32 @@ chrome.runtime.onStartup.addListener(() => {
     isPauseHidden = res.isPauseHidden;
     pausedTimestamp = res.pausedTimestamp;
     pauseHideTargetTime = res.pauseHideTargetTime;
-    if (!userDisconnected && !isPauseHidden) {
-      isManuallyDisconnected = false;
-      connectToNativeHost();
-    }
   });
   reInjectContentScripts(); 
 });
 
+function checkOpenYtmTabs() {
+  chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
+    if (chrome.runtime.lastError) return;
+    if (!tabs || tabs.length === 0) {
+      console.log('Background: No YouTube Music tabs open. Clearing activity.');
+      processClearActivity();
+    }
+  });
+}
+
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  checkOpenYtmTabs();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url && !changeInfo.url.includes("music.youtube.com")) {
+    checkOpenYtmTabs();
+  }
+});
+
 setupPeriodicAlarm();
-connectToNativeHost();
+reInjectContentScripts();
 
 if (periodicCheckIntervalId) {
     clearInterval(periodicCheckIntervalId);

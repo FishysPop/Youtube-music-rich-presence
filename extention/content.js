@@ -1,11 +1,16 @@
+(() => {
+if (typeof window.__ytmRpcCleanup === 'function') {
+  window.__ytmRpcCleanup();
+}
+
 let isExtensionContextValid = true;
 
 let lastContextInvalidWarningTime = 0;
-const CONTEXT_INVALID_WARNING_INTERVAL = 30000; // 30 seconds
+const CONTEXT_INVALID_WARNING_INTERVAL = 30000;
 
 let lastContextValidationTime = 0;
 let lastContextValidationResult = true;
-const CONTEXT_VALIDATION_CACHE_DURATION = 1000; // 1 second
+const CONTEXT_VALIDATION_CACHE_DURATION = 1000;
 
 function isExtensionContextStillValid() {
   const now = Date.now();
@@ -87,6 +92,14 @@ function getCurrentTrackInfo() {
           }
       }
 
+      const videoElement = document.querySelector('video');
+      if ((!duration || duration <= 0) && videoElement && !isNaN(videoElement.duration) && videoElement.duration > 0) {
+          duration = Math.floor(videoElement.duration);
+      }
+      if ((!currentTime || currentTime <= 0) && videoElement && !isNaN(videoElement.currentTime) && videoElement.currentTime > 0) {
+          currentTime = Math.floor(videoElement.currentTime);
+      }
+
       let isPlaying = false;
       if (playPauseButton && playPauseButton.title) {
           isPlaying = playPauseButton.title === 'Pause'; 
@@ -140,6 +153,7 @@ let trackChangeGracePeriodActive = false;
 let trackChangeGracePeriodTimer = null;
 let pauseGracePeriodTimer = null;
 let pauseGracePeriodExpired = false;
+let durationWaitAttempts = 0;
 
 let navigationFinishListener = null;
 let playerBarObserver = null;
@@ -176,6 +190,7 @@ function cleanup() {
     playerBarInterval = null;
   }
   
+  durationWaitAttempts = 0;
   isExtensionContextValid = false;
 }
 
@@ -208,11 +223,20 @@ function updateTrackInfo(forceSend = false) {
     if (currentTrackInfo) {
         if (currentTrackInfo.track !== lastSentTrack) {
             trackChangeGracePeriodActive = true;
+            durationWaitAttempts = 0;
             clearTimeout(trackChangeGracePeriodTimer);
             trackChangeGracePeriodTimer = setTimeout(() => {
                 trackChangeGracePeriodActive = false;
             }, 500); 
         }
+
+        if (currentTrackInfo.duration === 0 && durationWaitAttempts < 3) {
+            durationWaitAttempts++;
+            clearTimeout(updateDebounceTimer);
+            updateDebounceTimer = setTimeout(() => updateTrackInfo(), 100);
+            return;
+        }
+        durationWaitAttempts = 0;
 
         let isPlayingToSend = currentTrackInfo.isPlaying;
 
@@ -243,6 +267,7 @@ function updateTrackInfo(forceSend = false) {
             currentTrackInfo.track !== lastSentTrack ||
             currentTrackInfo.artist !== lastSentArtist ||
             currentTrackInfo.albumArtUrl !== lastSentAlbumArtUrl ||
+            currentTrackInfo.duration !== lastSentDuration ||
             isPlayingToSend !== lastSentIsPlaying ||
             (currentTrackInfo.currentTime !== undefined &&
              lastSentCurrentTime !== null &&
@@ -303,7 +328,7 @@ navigationFinishListener = () => {
         pauseGracePeriodTimer = null;
     }
     pauseGracePeriodExpired = false;
-    updateTrackInfo(true);
+    updateTrackInfo();
 };
 
 window.addEventListener('yt-navigate-finish', navigationFinishListener);
@@ -325,3 +350,6 @@ if (playerBarObserverTarget) {
     console.warn("[YTMusicRPC Content] ytmusic-player-bar not found for MutationObserver. Falling back to setInterval.");
     playerBarInterval = setInterval(() => updateTrackInfo(), 3000);
 }
+
+window.__ytmRpcCleanup = cleanup;
+})();

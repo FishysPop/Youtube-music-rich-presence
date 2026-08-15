@@ -109,16 +109,24 @@ if (pauseTimeoutInput) {
 
     switch (status) {
       case "disconnected":
-        nativeHostStatusText = "Disconnected";
+        if (response && response.nativeHostInstalled === false) {
+          nativeHostStatusText = "Not Installed";
+          nativeHostStatusClass = "error";
+        } else if (response && response.nativeHostInstalled === true) {
+          nativeHostStatusText = "Installed (Idle)";
+          nativeHostStatusClass = "connected";
+        } else {
+          nativeHostStatusText = "Disconnected";
+          nativeHostStatusClass = "disconnected";
+        }
         rpcStatusText = "Disconnected";
-        nativeHostStatusClass = "disconnected";
         rpcStatusClass = "disconnected";
         break;
       case "connecting_native":
         nativeHostStatusText = "Connecting...";
         rpcStatusText = "Connecting...";
         nativeHostStatusClass = "pending";
-        rpcStatusClass = "pending"; // RPC is also attempting to connect
+        rpcStatusClass = "pending";
         reconnectButton.disabled = true;
         break;
       case "native_connected":
@@ -127,7 +135,7 @@ if (pauseTimeoutInput) {
         nativeHostStatusClass = "connected";
         rpcStatusClass = "pending";
         break;
-      case "rpc_connecting": // This state is likely redundant if native_connected already implies RPC connecting
+      case "rpc_connecting":
         nativeHostStatusText = "Connected";
         rpcStatusText = "Connecting...";
         nativeHostStatusClass = "connected";
@@ -179,7 +187,7 @@ if (pauseTimeoutInput) {
     currentSongElement.textContent = songInfoText;
 
     if (nativeHostWarningElement) {
-      const isHostNotFound = errorMessage && (errorMessage.toLowerCase().includes("not found") || errorMessage.toLowerCase().includes("forbidden"));
+      const isHostNotFound = (errorMessage && (errorMessage.toLowerCase().includes("not found") || errorMessage.toLowerCase().includes("forbidden"))) || (response && response.nativeHostInstalled === false);
       if (isHostNotFound && status !== "connecting_native") {
         nativeHostWarningElement.innerHTML = `<strong>Warning:</strong> Native host application is not installed. <a href="#" id="nativeHostUpdateLink" style="color: #9ec5fe; font-weight: 600; text-decoration: underline;">Download Installer</a>`;
         nativeHostWarningElement.style.display = 'block';
