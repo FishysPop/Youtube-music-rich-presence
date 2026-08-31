@@ -1,79 +1,28 @@
 document.addEventListener("DOMContentLoaded", () => {
-let errorLogs = [];
-function addToLog(msg) {
-  const timestamp = new Date().toLocaleTimeString();
-  errorLogs.push(`[${timestamp}] ${msg}`);
-  if (errorLogs.length > 50) errorLogs.shift();
-}
-const origError = console.error;
-console.error = function(...args) {
-  addToLog(args.join(' '));
-  origError.apply(console, args);
-};
-const origWarn = console.warn;
-console.warn = function(...args) {
-  addToLog(args.join(' '));
-  origWarn.apply(console, args);
-};
+  let errorLogs = [];
+  function addToLog(msg) {
+    const timestamp = new Date().toLocaleTimeString();
+    errorLogs.push(`[${timestamp}] ${msg}`);
+    if (errorLogs.length > 50) errorLogs.shift();
+  }
+  const origError = console.error;
+  console.error = function(...args) {
+    addToLog(args.join(' '));
+    origError.apply(console, args);
+  };
+  const origWarn = console.warn;
+  console.warn = function(...args) {
+    addToLog(args.join(' '));
+    origWarn.apply(console, args);
+  };
 
-const openOptionsButton = document.getElementById("openOptionsButton");
-const optionsPanel = document.getElementById("optionsPanel");
-const logContent = document.getElementById("logContent");
-const hideOptionsButton = document.getElementById("hideOptionsButton");
-const autoReconnectCheckbox = document.getElementById("autoReconnectCheckbox");
-const pauseTimeoutInput = document.getElementById("pauseTimeoutInput");
+  const openOptionsButton = document.getElementById("openOptionsButton");
+  const optionsPanel = document.getElementById("optionsPanel");
+  const logContent = document.getElementById("logContent");
+  const hideOptionsButton = document.getElementById("hideOptionsButton");
+  const autoReconnectCheckbox = document.getElementById("autoReconnectCheckbox");
+  const pauseTimeoutInput = document.getElementById("pauseTimeoutInput");
 
-if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
-  openOptionsButton.addEventListener("click", () => {
-    if (optionsPanel.style.display === "block") {
-      optionsPanel.style.display = "none";
-    } else {
-      logContent.textContent = errorLogs.join("\n") || "No errors yet.";
-      optionsPanel.style.display = "block";
-      logContent.scrollTop = logContent.scrollHeight;
-    }
-  });
-  hideOptionsButton.addEventListener("click", () => {
-    optionsPanel.style.display = "none";
-  });
-}
-
-if (autoReconnectCheckbox) {
-  chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
-    autoReconnectCheckbox.checked = result.autoReconnectEnabled;
-  });
-
-  autoReconnectCheckbox.addEventListener("change", () => {
-    const enabled = autoReconnectCheckbox.checked;
-    chrome.storage.local.set({ autoReconnectEnabled: enabled }, () => {
-      console.log(`Popup: Auto Reconnect set to ${enabled}`);
-    });
-  });
-}
-
-if (pauseTimeoutInput) {
- chrome.storage.local.get({ pauseTimeoutMinutes: -1 }, (result) => {
-    pauseTimeoutInput.value = result.pauseTimeoutMinutes;
-  });
-
-  pauseTimeoutInput.addEventListener("change", () => {
-    let value = parseInt(pauseTimeoutInput.value);
-    if (isNaN(value) || value < -1) {
-      value = -1;
-      pauseTimeoutInput.value = -1;
-    } else if (value > 60) {
-      value = 60;
-      pauseTimeoutInput.value = 60;
-    }
-    
-    chrome.storage.local.set({ pauseTimeoutMinutes: value }, () => {
-      console.log(`Popup: Pause Timeout set to ${value} minutes`);
-    });
-  });
-}
-
-}
-);
   const nativeHostStatusElement = document.getElementById("nativeHostStatus");
   const rpcStatusElement = document.getElementById("rpcStatus");
   const rpcUserElement = document.getElementById("rpcUser");
@@ -81,19 +30,60 @@ if (pauseTimeoutInput) {
   const reconnectButton = document.getElementById("reconnectButton");
   const nativeHostWarningElement = document.getElementById("nativeHostWarning");
 
+  const REQUIRED_NATIVE_HOST_VERSION = "1.0.0";
+
+  if (openOptionsButton && optionsPanel && logContent && hideOptionsButton) {
+    openOptionsButton.addEventListener("click", () => {
+      if (optionsPanel.style.display === "block") {
+        optionsPanel.style.display = "none";
+      } else {
+        logContent.textContent = errorLogs.join("\n") || "No errors yet.";
+        optionsPanel.style.display = "block";
+        logContent.scrollTop = logContent.scrollHeight;
+      }
+    });
+    hideOptionsButton.addEventListener("click", () => {
+      optionsPanel.style.display = "none";
+    });
+  }
+
+  if (autoReconnectCheckbox) {
+    chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+      autoReconnectCheckbox.checked = result.autoReconnectEnabled;
+    });
+
+    autoReconnectCheckbox.addEventListener("change", () => {
+      const enabled = autoReconnectCheckbox.checked;
+      chrome.storage.local.set({ autoReconnectEnabled: enabled });
+    });
+  }
+
+  if (pauseTimeoutInput) {
+    chrome.storage.local.get({ pauseTimeoutMinutes: -1 }, (result) => {
+      pauseTimeoutInput.value = result.pauseTimeoutMinutes;
+    });
+
+    pauseTimeoutInput.addEventListener("change", () => {
+      let value = parseInt(pauseTimeoutInput.value);
+      if (isNaN(value) || value < -1) {
+        value = -1;
+        pauseTimeoutInput.value = -1;
+      } else if (value > 60) {
+        value = 60;
+        pauseTimeoutInput.value = 60;
+      }
+      
+      chrome.storage.local.set({ pauseTimeoutMinutes: value });
+    });
+  }
+
   function updatePopupUI(
     status,
     errorMessage = null,
     rpcUser = null,
     currentActivity = null,
-    response = {} // Add response object as a parameter
+    response = {}
   ) {
-    console.log(
-      "[POPUP_DEBUG] updatePopupUI called with currentActivity:",
-      currentActivity,
-      "Status:",
-      status
-    );
     let nativeHostStatusText = "Unknown";
     let rpcStatusText = "Unknown";
     let nativeHostStatusClass = "status-unknown";
@@ -101,11 +91,14 @@ if (pauseTimeoutInput) {
     let songInfoText = "Waiting for music...";
     let rpcUserText = "\u00A0";
     
-    // Always hide warning by default, will be shown if needed later
-    nativeHostWarningElement.style.display = 'none';
-    nativeHostWarningElement.innerHTML = ''; // Clear previous message
+    if (nativeHostWarningElement) {
+      nativeHostWarningElement.style.display = 'none';
+      nativeHostWarningElement.innerHTML = '';
+    }
 
-    reconnectButton.disabled = false;
+    if (reconnectButton) {
+      reconnectButton.disabled = false;
+    }
 
     switch (status) {
       case "disconnected":
@@ -127,7 +120,7 @@ if (pauseTimeoutInput) {
         rpcStatusText = "Connecting...";
         nativeHostStatusClass = "pending";
         rpcStatusClass = "pending";
-        reconnectButton.disabled = true;
+        if (reconnectButton) reconnectButton.disabled = true;
         break;
       case "native_connected":
         nativeHostStatusText = "Connected";
@@ -140,7 +133,7 @@ if (pauseTimeoutInput) {
         rpcStatusText = "Connecting...";
         nativeHostStatusClass = "connected";
         rpcStatusClass = "pending";
-        reconnectButton.disabled = true;
+        if (reconnectButton) reconnectButton.disabled = true;
         break;
       case "rpc_ready":
         nativeHostStatusText = "Connected";
@@ -150,16 +143,17 @@ if (pauseTimeoutInput) {
         if (rpcUser) {
           rpcUserText = `Logged in as ${rpcUser.username}`;
         }
-        reconnectButton.textContent = "Disconnect";
-        reconnectButton.title = "Disconnect from Native Host and Discord";
+        if (reconnectButton) {
+          reconnectButton.textContent = "Disconnect";
+          reconnectButton.title = "Disconnect from Native Host and Discord";
+        }
         break;
-  case "error":
-    nativeHostStatusText = (errorMessage && (errorMessage.toLowerCase().includes("not found") || errorMessage.toLowerCase().includes("forbidden"))) ? "Not Installed" : "Error";
-    rpcStatusText = "Disconnected";
-    nativeHostStatusClass = "error";
-    rpcStatusClass = "disconnected";
-    console.error("Popup: Received error status:", errorMessage);
-    break;
+      case "error":
+        nativeHostStatusText = (errorMessage && (errorMessage.toLowerCase().includes("not found") || errorMessage.toLowerCase().includes("forbidden"))) ? "Not Installed" : "Error";
+        rpcStatusText = "Disconnected";
+        nativeHostStatusClass = "error";
+        rpcStatusClass = "disconnected";
+        break;
       default:
         nativeHostStatusText = `Unknown (${status})`;
         rpcStatusText = `Unknown (${status})`;
@@ -167,24 +161,34 @@ if (pauseTimeoutInput) {
         rpcStatusClass = "unknown";
     }
 
-    if (status !== "rpc_ready") {
-        reconnectButton.textContent = "Reconnect";
-        reconnectButton.title = "Attempt to reconnect to Native Host";
+    if (status !== "rpc_ready" && reconnectButton) {
+      reconnectButton.textContent = "Reconnect";
+      reconnectButton.title = "Attempt to reconnect to Native Host";
     }
-    nativeHostStatusElement.textContent = nativeHostStatusText;
-    nativeHostStatusElement.className = "status-value " + nativeHostStatusClass;
 
-    rpcStatusElement.textContent = rpcStatusText;
-    rpcStatusElement.className = "status-value " + rpcStatusClass;
+    if (nativeHostStatusElement) {
+      nativeHostStatusElement.textContent = nativeHostStatusText;
+      nativeHostStatusElement.className = "status-value " + nativeHostStatusClass;
+    }
 
-    rpcUserElement.textContent = rpcUserText;
+    if (rpcStatusElement) {
+      rpcStatusElement.textContent = rpcStatusText;
+      rpcStatusElement.className = "status-value " + rpcStatusClass;
+    }
+
+    if (rpcUserElement) {
+      rpcUserElement.textContent = rpcUserText;
+    }
 
     if (currentActivity && currentActivity.details) {
       songInfoText = `${currentActivity.details} - ${currentActivity.state}`;
     } else {
       songInfoText = "Waiting for music...";
     }
-    currentSongElement.textContent = songInfoText;
+
+    if (currentSongElement) {
+      currentSongElement.textContent = songInfoText;
+    }
 
     if (nativeHostWarningElement) {
       const isHostNotFound = (errorMessage && (errorMessage.toLowerCase().includes("not found") || errorMessage.toLowerCase().includes("forbidden"))) || (response && response.nativeHostInstalled === false);
@@ -201,7 +205,7 @@ if (pauseTimeoutInput) {
       } else if (response.nativeHostVersion !== undefined && response.nativeHostVersionMismatch && status !== "connecting_native") {
         let warningMessage = "Native Host version mismatch. Please update your native host application.";
         if (response.nativeHostVersion) {
-            warningMessage += ` Current: ${response.nativeHostVersion}. Required: ${REQUIRED_NATIVE_HOST_VERSION}.`;
+          warningMessage += ` Current: ${response.nativeHostVersion}. Required: ${REQUIRED_NATIVE_HOST_VERSION}.`;
         }
         nativeHostWarningElement.innerHTML = `<strong>Warning:</strong> ${warningMessage} <a href="#" id="nativeHostUpdateLink" style="color: #9ec5fe; font-weight: 600; text-decoration: underline;">Click here for instructions.</a>`;
         nativeHostWarningElement.style.display = 'block';
@@ -216,99 +220,63 @@ if (pauseTimeoutInput) {
         nativeHostWarningElement.style.display = 'none';
       }
     }
-  } // This brace closes the updatePopupUI function.
-
-  // Define REQUIRED_NATIVE_HOST_VERSION in popup.js as well for comparison
-  const REQUIRED_NATIVE_HOST_VERSION = "1.0.0"; // Must match the version in background.js
+  }
 
   chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {
     if (chrome.runtime.lastError) {
-      console.error(
-        "Popup: Error getting initial status:",
-        chrome.runtime.lastError.message
-      );
       updatePopupUI(
         "error",
         `Failed to get status: ${chrome.runtime.lastError.message}`
       );
     } else if (response && response.type === "STATUS_RESPONSE") {
-      console.log("[POPUP_DEBUG] Initial GET_STATUS response:", response);
       updatePopupUI(
         response.status,
         response.errorMessage,
         response.rpcUser,
         response.currentActivity,
-        response // Pass the entire response object to updatePopupUI for version info
-      );
-    } else {
-      console.warn(
-        "Popup: Received unexpected response for GET_STATUS:",
         response
       );
-      updatePopupUI("error", "Received unexpected status response.", null, null, response); // Pass response for version info
+    } else {
+      updatePopupUI("error", "Received unexpected status response.", null, null, response);
     }
   });
 
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message) => {
     if (message && message.type === "STATUS_UPDATE") {
-      console.log("[POPUP_DEBUG] Received STATUS_UPDATE message:", message);
       updatePopupUI(
         message.status,
         message.errorMessage,
         message.rpcUser,
         message.currentActivity,
-        message // Pass the entire message object to updatePopupUI for version info
+        message
       );
     }
   });
 
   if (reconnectButton) {
     reconnectButton.addEventListener("click", () => {
-      // Immediately hide the warning when reconnect is triggered
       if (nativeHostWarningElement) {
         nativeHostWarningElement.style.display = 'none';
       }
 
       if (reconnectButton.textContent === "Disconnect") {
-        console.log("Popup: Disconnect button clicked.");
-        nativeHostStatusElement.textContent = "Disconnecting...";
-        nativeHostStatusElement.className = "status-value pending";
-        rpcStatusElement.textContent = "Disconnecting...";
-        rpcStatusElement.className = "status-value pending";
+        if (nativeHostStatusElement) {
+          nativeHostStatusElement.textContent = "Disconnecting...";
+          nativeHostStatusElement.className = "status-value pending";
+        }
+        if (rpcStatusElement) {
+          rpcStatusElement.textContent = "Disconnecting...";
+          rpcStatusElement.className = "status-value pending";
+        }
         reconnectButton.disabled = true;
 
-        chrome.runtime.sendMessage({ type: "DISCONNECT_NATIVE_HOST" }, (response) => {
-            if (chrome.runtime.lastError) {
-                console.error("Popup: Error sending DISCONNECT_NATIVE_HOST message:", chrome.runtime.lastError.message);
-            } else {
-                console.log("Popup: DISCONNECT_NATIVE_HOST message sent.", response);
-            }
-        });
+        chrome.runtime.sendMessage({ type: "DISCONNECT_NATIVE_HOST" });
       } else {
-        console.log("Popup: Reconnect button clicked.");
         updatePopupUI("connecting_native");
         reconnectButton.disabled = true;
-        chrome.runtime.sendMessage(
-          { type: "RECONNECT_NATIVE_HOST" },
-          (response) => {
-            if (chrome.runtime.lastError) {
-              console.error(
-                "Popup: Error sending RECONNECT_NATIVE_HOST message:",
-                chrome.runtime.lastError.message
-              );
-            } else {
-              console.log("Popup: RECONNECT_NATIVE_HOST message sent.", response);
-            }
-          }
-        );
+        chrome.runtime.sendMessage({ type: "RECONNECT_NATIVE_HOST" });
       }
     });
   }
+});
 
-if (openOptionsButton) {
-  openOptionsButton.addEventListener("click", () => {
-    console.log("Popup: Options button clicked.");
-    // The logic to toggle optionsPanel is already handled by the first event listener
-    // No need to send OPEN_OPTIONS_PAGE message as per user's request to revert old behavior
-  });
-}

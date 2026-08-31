@@ -502,7 +502,9 @@ function processNewActivity(message) {
             statusDisplayType : 2,
             type: 2
         };
-        currentSongActivity.startTimestamp = Math.floor(Date.now()) - (message.currentTime * 1000);
+        const initCurrentTime = (message.currentTime && message.currentTime < 5) ? message.currentTime : 0;
+        currentSongActivity.startTimestamp = Math.floor(Date.now()) - (initCurrentTime * 1000);
+        currentSongActivity.duration = (message.duration && message.duration > 0) ? message.duration : 0;
         pausedTimestamp = null;
         pauseHideTargetTime = null;
         isPauseHidden = false;
@@ -521,11 +523,22 @@ function processNewActivity(message) {
             connectToNativeHost();
         }
     } else if (message.currentTime !== undefined) {
-        const expectedCurrentTime = (Math.floor(Date.now()) - currentSongActivity.startTimestamp) / 1000;
-        const timeDifference = Math.abs(message.currentTime - expectedCurrentTime);
-        
-        if (timeDifference > 2) {
-            currentSongActivity.startTimestamp = Math.floor(Date.now()) - (message.currentTime * 1000);
+        if (message.duration && message.duration > 0) {
+            currentSongActivity.duration = Math.max(currentSongActivity.duration || 0, message.duration);
+        }
+        const effectiveDuration = currentSongActivity.duration || message.duration || 0;
+        if (effectiveDuration === 0 || message.currentTime < effectiveDuration) {
+            const expectedCurrentTime = pausedTimestamp !== null
+                ? (pausedTimestamp - currentSongActivity.startTimestamp) / 1000
+                : (Math.floor(Date.now()) - currentSongActivity.startTimestamp) / 1000;
+            const timeDifference = Math.abs(message.currentTime - expectedCurrentTime);
+            
+            if (timeDifference > 2) {
+                currentSongActivity.startTimestamp = Math.floor(Date.now()) - (message.currentTime * 1000);
+                if (pausedTimestamp !== null) {
+                    pausedTimestamp = Math.floor(Date.now());
+                }
+            }
         }
     }
 
@@ -584,8 +597,9 @@ function processNewActivity(message) {
         }
     }
 
-    if (message.isPlaying && message.duration && message.duration > 0) {
-        currentSongActivity.endTimestamp = currentSongActivity.startTimestamp + (message.duration * 1000);
+    const activeDuration = currentSongActivity.duration || message.duration;
+    if (message.isPlaying && activeDuration && activeDuration > 0) {
+        currentSongActivity.endTimestamp = currentSongActivity.startTimestamp + (activeDuration * 1000);
     } else if (!message.isPlaying && currentSongActivity && currentSongActivity.endTimestamp) {
         delete currentSongActivity.endTimestamp;
     }

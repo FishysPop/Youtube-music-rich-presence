@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YT Music RPC Status</title>
   <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
     :root {
       --bg: #181a20;
       --panel: #23262f;
@@ -16,6 +19,21 @@
       --error: #f04747;
       --pending: #faa61a;
     }
+    html, body {
+      width: 270px;
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+    }
+    body {
+      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
+      color: var(--text);
+      padding: 12px;
+      font-size: 13px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      max-height: 580px;
+    }
     a {
       color: #9ec5fe;
       font-weight: 600;
@@ -24,24 +42,9 @@
     a:hover, a:focus {
       color: #c6dcff;
     }
-    body {
-      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      width: 250px;
-      padding: 10px 8px 8px 8px;
-      font-size: 13px;
-      border-radius: 16px;
-      box-shadow: 0 4px 24px 0 #0008;
-      margin: 0;
-      overflow-y: auto; /* Consider 'scroll' if content height changes cause flicker */
-      scrollbar-gutter: stable;
-      min-height: 320px; /* Or a height that fits your content comfortably */
-      max-height: 400px;
-    }
     h3 {
       margin-top: 0;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
       font-size: 1.1em;
       font-weight: 600;
       letter-spacing: 0.5px;
@@ -76,10 +79,10 @@
       letter-spacing: 0.1px;
       border-radius: 6px;
       padding: 2px 7px;
-      display: inline-block; /* Or block if you want it on its own line always */
-      background: #23262f; /* Default background for status-value */
+      display: inline-block;
+      background: #23262f;
       transition: color 0.2s, background 0.2s;
-      min-height: 1.2em; /* Helps stabilize height if text content changes */
+      min-height: 1.2em;
     }
     .status-value.connected {
       color: var(--success);
@@ -99,11 +102,10 @@
       color: var(--text-muted);
       font-size: 0.95em;
       word-break: break-word;
-      min-height: 1.1em; /* Helps stabilize height, adjust as needed */
+      min-height: 1.1em;
     }
-    /* Specific min-height for current song to accommodate 1-2 lines */
     #currentSong {
-        min-height: 2.2em; /* Adjust based on your font size and line height for 2 lines */
+      min-height: 2.2em;
     }
     .button-row {
       display: flex;
@@ -111,17 +113,14 @@
       margin-top: 10px;
       margin-bottom: 0;
     }
-   button {
+    button {
       flex: 1 1 0;
-      padding: 5px 8px;
-      
+      padding: 6px 8px;
       border: none;
       border-radius: 8px; 
       background: var(--accent);
       color: #fff;
-
       font-size: 0.9em; 
-      
       font-weight: 600;
       cursor: pointer;
       box-shadow: 0 2px 8px 0 #0002;
@@ -129,7 +128,6 @@
       outline: none;
       letter-spacing: 0.2px;
     }
-
     button:last-child {
       background: #23262f; 
       color: var(--accent);
@@ -142,9 +140,6 @@
     button:last-child:hover, button:last-child:focus {
       background: #232f4a;
       color: #aeb8e6;
-    }
-    @media (max-width: 260px) {
-      body { width: 98vw; padding: 6px; }
     }
   </style>
 </head>
@@ -159,7 +154,7 @@
   <div class="status-section">
     <span class="status-label">Discord RPC:</span>
     <span id="rpcStatus" class="status-value">Checking...</span>
-    <div id="rpcUser" class="song-info" style="font-size: 0.95em;">&nbsp;</div> <!-- Added &nbsp; for initial height -->
+    <div id="rpcUser" class="song-info" style="font-size: 0.95em;">&nbsp;</div>
   </div>
 
   <div class="status-section">
@@ -179,29 +174,25 @@
     </p>
   </div>
 
-<div class="button-row">
-  <button id="reconnectButton">Reconnect</button>
-  <button id="openOptionsButton">Options</button>
-</div>
-<div id="optionsPanel" style="display:none; background:#181a20; color:#faa61a; border:1px solid #faa61a; border-radius:8px; margin-top:10px; padding:10px; max-height:180px; overflow:auto; font-size:0.95em;">
-  <div style="font-weight:bold; margin-bottom:6px; color:#faa61a;">Options</div>
-  <div style="margin-top: 10px; margin-bottom: 10px; display: flex; align-items: center;">
-    <label for="autoReconnectCheckbox" style="margin-right: 8px; cursor: pointer;">Auto Reconnect:</label>
-    <input type="checkbox" id="autoReconnectCheckbox" style="cursor: pointer;">
-</div>
-  <div style="margin-top: 10px; margin-bottom: 10px; display: flex; align-items: center;">
-    <label for="pauseTimeoutInput" style="margin-right: 8px; cursor: pointer;">Hide after paused (min):</label>
-    <input type="number" id="pauseTimeoutInput" style="cursor: pointer; width: 45px; padding: 2px 5px; background: #23262f; color: var(--text); border: 1px solid var(--border); border-radius: 4px;" min="-1" max="60" value="-1">
-</div>
-  <div style="margin-bottom:8px; color:#faa61a; font-weight:bold;">Error Log</div>
-  <pre id="logContent" style="white-space:pre-wrap;word-break:break-all;margin:0; color:#faa61a; background:#23262f; border-radius:6px; padding:6px; max-height:70px; overflow:auto;"></pre>
-  <button id="hideOptionsButton" style="margin-top:10px;float:right;background:#23262f;color:#faa61a;border:1px solid #faa61a;">Close</button>
-</div>
-<div id="logPanel" style="display:none; background:#181a20; color:#faa61a; border:1px solid #faa61a; border-radius:8px; margin-top:10px; padding:8px; max-height:120px; overflow:auto; font-size:0.92em;">
-  <div style="font-weight:bold; margin-bottom:4px;">Error Log</div>
-  <pre id="logContent" style="white-space:pre-wrap;word-break:break-all;margin:0;"></pre>
-  <button id="hideLogsButton" style="margin-top:6px;float:right;background:#23262f;color:#faa61a;border:1px solid #faa61a;">Close</button>
-</div>
+  <div class="button-row">
+    <button id="reconnectButton">Reconnect</button>
+    <button id="openOptionsButton">Options</button>
+  </div>
+
+  <div id="optionsPanel" style="display:none; background:#181a20; color:#faa61a; border:1px solid #faa61a; border-radius:8px; margin-top:10px; padding:10px; max-height:180px; overflow:auto; font-size:0.95em;">
+    <div style="font-weight:bold; margin-bottom:6px; color:#faa61a;">Options</div>
+    <div style="margin-top: 10px; margin-bottom: 10px; display: flex; align-items: center;">
+      <label for="autoReconnectCheckbox" style="margin-right: 8px; cursor: pointer;">Auto Reconnect:</label>
+      <input type="checkbox" id="autoReconnectCheckbox" style="cursor: pointer;">
+    </div>
+    <div style="margin-top: 10px; margin-bottom: 10px; display: flex; align-items: center;">
+      <label for="pauseTimeoutInput" style="margin-right: 8px; cursor: pointer;">Hide after paused (min):</label>
+      <input type="number" id="pauseTimeoutInput" style="cursor: pointer; width: 45px; padding: 2px 5px; background: #23262f; color: var(--text); border: 1px solid var(--border); border-radius: 4px;" min="-1" max="60" value="-1">
+    </div>
+    <div style="margin-bottom:8px; color:#faa61a; font-weight:bold;">Error Log</div>
+    <pre id="logContent" style="white-space:pre-wrap;word-break:break-all;margin:0; color:#faa61a; background:#23262f; border-radius:6px; padding:6px; max-height:70px; overflow:auto;"></pre>
+    <button id="hideOptionsButton" style="margin-top:10px;float:right;background:#23262f;color:#faa61a;border:1px solid #faa61a;">Close</button>
+  </div>
 
   <script src="popup.js"></script>
 </body>
