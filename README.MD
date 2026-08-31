@@ -6,29 +6,33 @@ Displays your YouTube Music activity as your Discord Rich Presence. This Chrome 
 
 ## ✅ Prerequisites
 
-*   Google Chrome 
+*   **Google Chrome** (Official Support) or Chromium-based browsers (**Microsoft Edge**, **Brave** - Beta Support).
 *   The **YouTube Music Rich Presence Native Host** application.
 
 ## 🚀 Installation
 
-You need to install two things: the Native Host and the Chrome Extension.
+You need to install two things: the Native Host and the Browser Extension.
 
 ### 1. Native Host Application
 
 *   Go to the **Releases Page** of this GitHub repository.
 *   Download `YouTubeMusicRPCSetup.exe` from the latest release.
 *   Run `YouTubeMusicRPCSetup.exe` and follow the on-screen instructions to install the native host application. This will register it with your browser.
-*   After installation, the native application (e.g., `youtube_music_rpc.exe`) should ideally run automatically. If not, you might need to start it manually. It needs to be running for the extension to work.
+*   After installation, the native application (e.g., `youtube_music_rpc.exe`) should run automatically in the background when needed.
 
-### 2. 🌐 Chrome Extension
+### 2. 🌐 Browser Extension (Chrome, Edge & Brave)
 
 *   **Option A: Chrome Web Store (Recommended)**
-    *   [https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb](https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb)
+    *   [Chrome Web Store Link](https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb)
+    *   *Note for Edge and Brave users:* You can install directly from the Chrome Web Store by allowing extensions from other stores when prompted.
 *   **Option B: Manual Installation (Sideloading)**
     1.  Download or clone this repository.
     2.  Extract the ZIP file if you downloaded it.
-    3.  Go to `chrome://extensions` in your browser.
-    4.  Enable **Developer mode** (usually a top-right toggle).
+    3.  Open the extensions page in your browser:
+        *   **Chrome:** `chrome://extensions`
+        *   **Edge:** `edge://extensions`
+        *   **Brave:** `brave://extensions`
+    4.  Enable **Developer mode** (usually a toggle in the top-right or sidebar).
     5.  Click the **"Load unpacked"** button.
     6.  Select the `extention` subfolder from this repository.
     7.  The extension should now be listed and active.
