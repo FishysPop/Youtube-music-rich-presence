@@ -8,7 +8,7 @@ const PERIODIC_CHECK_INTERVAL = 1200000;
 
 // --- Dynamic Reconnection Timer ---
 let reconnectAttempts = 0;
-const INITIAL_RECONNECT_DELAY = 5000; // 5 seconds
+const INITIAL_RECONNECT_DELAY = 3000; // 3 seconds
 const MAX_RECONNECT_DELAY = 180000; // 3 minutes
 
 // --- State Management ---
@@ -143,10 +143,21 @@ function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, 
 
 function _sendSetActivityToNativeHost(activityData) {
     if (!port) {
-        console.warn('Background: Attempted to send SET_ACTIVITY, but native host port is not connected.');
+        console.warn('[YTM RPC Background] Attempted to send SET_ACTIVITY, but native host port is not connected.');
         return;
     }
     try {
+        console.log('[YTM RPC Background] Posting SET_ACTIVITY to native host. Details:', {
+            track: activityData.details,
+            artist: activityData.state,
+            startTimestamp: activityData.startTimestamp,
+            startTimestampReadable: activityData.startTimestamp ? new Date(activityData.startTimestamp).toLocaleTimeString() : 'none',
+            endTimestamp: activityData.endTimestamp,
+            endTimestampReadable: activityData.endTimestamp ? new Date(activityData.endTimestamp).toLocaleTimeString() : 'none',
+            elapsedSeconds: activityData.startTimestamp ? ((Date.now() - activityData.startTimestamp) / 1000).toFixed(1) : 'none',
+            duration: activityData.duration,
+            smallImageKey: activityData.smallImageKey
+        });
         port.postMessage({ type: 'SET_ACTIVITY', data: activityData });
         console.log('Background: Sent SET_ACTIVITY to native host:', activityData);
     } catch (error) {
@@ -161,6 +172,7 @@ function _sendClearActivityToNativeHost() {
         return;
     }
     try {
+        console.log('[YTM RPC Background] Posting CLEAR_ACTIVITY to native host');
         port.postMessage({ type: 'CLEAR_ACTIVITY' });
         console.log('Background: Sent CLEAR_ACTIVITY to native host.');
     } catch (error) {
@@ -404,11 +416,21 @@ function connectToNativeHost() {
                 case 'error_rpc_not_ready':
                     isRpcReady = false;
                     updateStatus('native_connected', message.message, currentRpcUser, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
+                    chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+                        if (result.autoReconnectEnabled && !isManuallyDisconnected && !userDisconnected) {
+                            scheduleReconnect(reconnectDiscordRpcOnly);
+                        }
+                    });
                     break;
                 case 'error':
                 case 'clear_error':
                     isRpcReady = false;
                     updateStatus('native_connected', message.message, null, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
+                    chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+                        if (result.autoReconnectEnabled && !isManuallyDisconnected && !userDisconnected) {
+                            scheduleReconnect(reconnectDiscordRpcOnly);
+                        }
+                    });
                     break;
                 default:
                     console.warn('Background: Received unknown ACTIVITY_STATUS status:', message.status);
@@ -472,21 +494,22 @@ function processNewActivity(message) {
         }
         if (isManuallyDisconnected && !userDisconnected) {
             isManuallyDisconnected = false;
-            console.log('Background: Playback active/resumed, resetting temporary disconnect.');
         }
     } else {
         if (isPauseHidden && currentSongActivity && currentSongActivity.details === message.track && currentSongActivity.state === message.artist) {
-            console.log('Background: Track is paused and pause timeout active; ignoring update to stay hidden.');
             return;
         }
         if (pauseHideTargetTime && Date.now() >= pauseHideTargetTime && !isPauseHidden) {
-            console.log('Background: Pause timeout elapsed while inactive; executing hide.');
             handlePauseHideTimeout();
             return;
         }
     }
 
-    if (!currentSongActivity || currentSongActivity.details !== message.track || currentSongActivity.state !== message.artist) {
+    let shouldUpdatePresence = false;
+    const isDifferentSong = !currentSongActivity || currentSongActivity.details !== message.track || currentSongActivity.state !== message.artist;
+
+    if (isDifferentSong) {
+        shouldUpdatePresence = true;
         currentSongActivity = {
             details: message.track,
             state: message.artist,
@@ -502,9 +525,16 @@ function processNewActivity(message) {
             statusDisplayType : 2,
             type: 2
         };
-        const initCurrentTime = (message.currentTime && message.currentTime < 5) ? message.currentTime : 0;
+        let initCurrentTime = 0;
+        if (message.userIsSeeking && typeof message.currentTime === 'number' && message.currentTime > 0) {
+            initCurrentTime = message.currentTime;
+        } else if (!currentActivity && typeof message.currentTime === 'number' && message.currentTime > 0 && (!message.duration || message.currentTime < message.duration)) {
+            initCurrentTime = message.currentTime;
+        }
+
         currentSongActivity.startTimestamp = Math.floor(Date.now()) - (initCurrentTime * 1000);
         currentSongActivity.duration = (message.duration && message.duration > 0) ? message.duration : 0;
+
         pausedTimestamp = null;
         pauseHideTargetTime = null;
         isPauseHidden = false;
@@ -519,24 +549,36 @@ function processNewActivity(message) {
         
         if (isManuallyDisconnected && !userDisconnected) {
             isManuallyDisconnected = false;
-            console.log('Background: New song detected, reconnecting after temporary disconnect.');
             connectToNativeHost();
         }
-    } else if (message.currentTime !== undefined) {
-        if (message.duration && message.duration > 0) {
-            currentSongActivity.duration = Math.max(currentSongActivity.duration || 0, message.duration);
+    } else {
+        if (message.duration && message.duration > 0 && (!currentSongActivity.duration || currentSongActivity.duration === 0)) {
+            currentSongActivity.duration = message.duration;
+            shouldUpdatePresence = true;
         }
-        const effectiveDuration = currentSongActivity.duration || message.duration || 0;
-        if (effectiveDuration === 0 || message.currentTime < effectiveDuration) {
-            const expectedCurrentTime = pausedTimestamp !== null
-                ? (pausedTimestamp - currentSongActivity.startTimestamp) / 1000
-                : (Math.floor(Date.now()) - currentSongActivity.startTimestamp) / 1000;
-            const timeDifference = Math.abs(message.currentTime - expectedCurrentTime);
-            
-            if (timeDifference > 2) {
-                currentSongActivity.startTimestamp = Math.floor(Date.now()) - (message.currentTime * 1000);
-                if (pausedTimestamp !== null) {
-                    pausedTimestamp = Math.floor(Date.now());
+
+        if (message.albumArtUrl && message.albumArtUrl !== currentSongActivity.albumArtUrl) {
+            currentSongActivity.albumArtUrl = message.albumArtUrl;
+            currentSongActivity.largeImageKey = message.albumArtUrl.replace(/w\d+-h\d+/, 'w512-h512');
+            shouldUpdatePresence = true;
+        }
+
+        if (typeof message.currentTime === 'number' && !isNaN(message.currentTime) && message.currentTime >= 0) {
+            const effectiveDuration = currentSongActivity.duration || message.duration || 0;
+            if (effectiveDuration === 0 || message.currentTime <= effectiveDuration) {
+                const expectedCurrentTime = pausedTimestamp !== null
+                    ? (pausedTimestamp - currentSongActivity.startTimestamp) / 1000
+                    : (Math.floor(Date.now()) - currentSongActivity.startTimestamp) / 1000;
+                const timeDifference = Math.abs(message.currentTime - expectedCurrentTime);
+
+                const isSpuriousZero = message.currentTime === 0 && expectedCurrentTime > 3 && !message.userIsSeeking;
+
+                if (!isSpuriousZero && timeDifference > 3.5) {
+                    currentSongActivity.startTimestamp = Math.floor(Date.now()) - (message.currentTime * 1000);
+                    if (pausedTimestamp !== null) {
+                        pausedTimestamp = Math.floor(Date.now());
+                    }
+                    shouldUpdatePresence = true;
                 }
             }
         }
@@ -547,6 +589,7 @@ function processNewActivity(message) {
         delete currentSongActivity.endTimestamp;
         currentSongActivity.smallImageKey = 'https://cdn.rcd.gg/PreMiD/resources/pause.png';
         currentSongActivity.smallImageText = 'Paused';
+        shouldUpdatePresence = true;
         
         getPauseTimeout().then((timeoutMinutes) => {
             if (pauseTimeoutId) {
@@ -565,7 +608,6 @@ function processNewActivity(message) {
                     chrome.alarms.create('pauseHideAlarm', { when: targetTime });
                 }
                 pauseTimeoutId = setTimeout(() => {
-                    console.log(`Background: Paused for ${timeoutMinutes} minutes, hiding activity`);
                     handlePauseHideTimeout();
                 }, timeoutMinutes * 60 * 1000);
             } else {
@@ -581,6 +623,7 @@ function processNewActivity(message) {
         chrome.storage.local.set({ pausedTimestamp: null, pauseHideTargetTime: null, isPauseHidden: false });
         currentSongActivity.smallImageKey = 'play';
         currentSongActivity.smallImageText = 'Playing';
+        shouldUpdatePresence = true;
         
         if (pauseTimeoutId) {
             clearTimeout(pauseTimeoutId);
@@ -592,27 +635,34 @@ function processNewActivity(message) {
         
         if (isManuallyDisconnected && !userDisconnected) {
             isManuallyDisconnected = false;
-            console.log('Background: Playback resumed, reconnecting after temporary disconnect.');
             connectToNativeHost();
         }
     }
 
     const activeDuration = currentSongActivity.duration || message.duration;
     if (message.isPlaying && activeDuration && activeDuration > 0) {
-        currentSongActivity.endTimestamp = currentSongActivity.startTimestamp + (activeDuration * 1000);
+        const calculatedEnd = currentSongActivity.startTimestamp + (activeDuration * 1000);
+        if (currentSongActivity.endTimestamp !== calculatedEnd) {
+            currentSongActivity.endTimestamp = calculatedEnd;
+            shouldUpdatePresence = true;
+        }
     } else if (!message.isPlaying && currentSongActivity && currentSongActivity.endTimestamp) {
         delete currentSongActivity.endTimestamp;
+        shouldUpdatePresence = true;
     }
 
     pendingActivity = currentSongActivity;
     updateStatus(currentStatus, statusErrorMessage, currentRpcUser, pendingActivity, nativeHostVersion, nativeHostVersionMismatch);
 
-    if (isRpcReady && port) {
-        _sendSetActivityToNativeHost(pendingActivity);
-    } else {
-        console.log('Background: RPC not ready or port not connected. Activity is pending.');
-        if (!port && !connectRetryTimeout) {
-            connectToNativeHost();
+    if (shouldUpdatePresence) {
+        if (isRpcReady && port) {
+            _sendSetActivityToNativeHost(pendingActivity);
+        } else {
+            if (!port && !connectRetryTimeout) {
+                connectToNativeHost();
+            } else if (port && !isRpcReady && !connectRetryTimeout) {
+                reconnectDiscordRpcOnly();
+            }
         }
     }
 }
@@ -753,6 +803,17 @@ function periodicConnectionCheck() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
+    console.log('[YTM RPC Background] Received message from YouTube Music tab:', {
+      tabId: sender.tab.id,
+      tabActive: sender.tab.active,
+      type: message ? message.type : undefined,
+      track: message ? message.track : undefined,
+      artist: message ? message.artist : undefined,
+      currentTime: message ? message.currentTime : undefined,
+      duration: message ? message.duration : undefined,
+      isPlaying: message ? message.isPlaying : undefined
+    });
+
     if (!userDisconnected && message && message.isPlaying) {
         isManuallyDisconnected = false;
         isPauseHidden = false;
@@ -764,6 +825,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sendResponse) sendResponse({ status: "Activity info processed by background" });
       return false; 
     } else if (message && message.type === 'NO_TRACK') {
+        console.log('[YTM RPC Background] NO_TRACK message received from tab. Clearing activity.');
         processClearActivity();
         if (sendResponse) sendResponse({ status: "No track detected, clear processed by background" });
         return false; 

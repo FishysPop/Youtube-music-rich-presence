@@ -29,6 +29,29 @@ function isExtensionContextStillValid() {
   return lastContextValidationResult;
 }
 
+function findVideoElement() {
+  const directVideo = document.querySelector('video.html5-main-video') || document.querySelector('video');
+  if (directVideo) return directVideo;
+
+  const player = document.querySelector('ytmusic-player') || document.querySelector('#player');
+  if (player) {
+    if (player.shadowRoot) {
+      const shadowVideo = player.shadowRoot.querySelector('video');
+      if (shadowVideo) return shadowVideo;
+    }
+    const innerVideo = player.querySelector('video');
+    if (innerVideo) return innerVideo;
+  }
+
+  const playerBar = document.querySelector('ytmusic-player-bar');
+  if (playerBar && playerBar.shadowRoot) {
+    const barVideo = playerBar.shadowRoot.querySelector('video');
+    if (barVideo) return barVideo;
+  }
+
+  return null;
+}
+
 function getCurrentTrackInfo() {
   try {
     const playerBar = document.querySelector('ytmusic-player-bar');
@@ -41,16 +64,17 @@ function getCurrentTrackInfo() {
       root = playerBar.shadowRoot;
     }
 
-    const trackElement = root.querySelector('.title.style-scope.ytmusic-player-bar');
-    const artistElement = root.querySelector('.byline.style-scope.ytmusic-player-bar');
-    const albumArtElement = root.querySelector('img.image.style-scope.ytmusic-player-bar');
-    const timeInfoElement = root.querySelector('.time-info.style-scope.ytmusic-player-bar'); 
+    const trackElement = root.querySelector('.title.style-scope.ytmusic-player-bar') || root.querySelector('yt-formatted-string.title') || root.querySelector('.middle-controls .title');
+    const artistElement = root.querySelector('.byline.style-scope.ytmusic-player-bar') || root.querySelector('yt-formatted-string.byline') || root.querySelector('.middle-controls .byline');
+    const albumArtElement = root.querySelector('img.image.style-scope.ytmusic-player-bar') || root.querySelector('.thumbnail-image-wrapper img') || root.querySelector('#thumbnail img');
+    const timeInfoElement = root.querySelector('.time-info.style-scope.ytmusic-player-bar') || root.querySelector('.time-info');
     const playPauseButton = root.querySelector('#play-pause-button');
+    const videoElement = findVideoElement();
 
-    if (trackElement && trackElement.innerText && artistElement && artistElement.innerText) {
-      const track = trackElement.innerText.trim();
-      let artistText = artistElement.innerText.trim();
+    const trackText = trackElement ? (trackElement.textContent || trackElement.innerText || trackElement.getAttribute('title') || '').trim() : '';
+    let artistText = artistElement ? (artistElement.textContent || artistElement.innerText || artistElement.getAttribute('title') || '').trim() : '';
 
+    if (trackText && artistText) {
       const separatorIndex = artistText.indexOf('•');
       if (separatorIndex !== -1) {
         artistText = artistText.substring(0, separatorIndex).trim();
@@ -59,6 +83,7 @@ function getCurrentTrackInfo() {
         artistText = artistText.substring(0, artistText.length - 1).trim();
       }
       const artist = artistText;
+      const track = trackText;
 
       let albumArtUrl = null;
       if (albumArtElement && albumArtElement.src) {
@@ -71,46 +96,62 @@ function getCurrentTrackInfo() {
 
       let currentTime = 0;
       let duration = 0;
-      if (timeInfoElement && timeInfoElement.innerText) {
-        const timeParts = timeInfoElement.innerText.split(' / ');
-        if (timeParts.length === 2) {
-          const currentTimeString = timeParts[0].trim();
-          const currentTimeParts = currentTimeString.split(':').map(Number);
-          if (currentTimeParts.length === 2) {
-            currentTime = currentTimeParts[0] * 60 + currentTimeParts[1];
-          } else if (currentTimeParts.length === 3) { 
-            currentTime = currentTimeParts[0] * 3600 + currentTimeParts[1] * 60 + currentTimeParts[2];
-          }
-          
-          const durationString = timeParts[1].trim();
-          const durationParts = durationString.split(':').map(Number);
-          if (durationParts.length === 2) {
-            duration = durationParts[0] * 60 + durationParts[1];
-          } else if (durationParts.length === 3) { 
-            duration = durationParts[0] * 3600 + durationParts[1] * 60 + durationParts[2];
+
+      if (timeInfoElement) {
+        const timeText = (timeInfoElement.textContent || timeInfoElement.innerText || '').trim();
+        if (timeText) {
+          const timeParts = timeText.split(' / ');
+          if (timeParts.length === 2) {
+            const parsePart = (str) => {
+              const parts = str.trim().split(':').map(Number);
+              if (parts.some(isNaN)) return 0;
+              if (parts.length === 2) return parts[0] * 60 + parts[1];
+              if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+              return 0;
+            };
+            const parsedDuration = parsePart(timeParts[1]);
+            if (parsedDuration > 0) {
+              duration = parsedDuration;
+            }
+            const parsedCurrent = parsePart(timeParts[0]);
+            if (parsedCurrent > 0) {
+              currentTime = parsedCurrent;
+            }
           }
         }
       }
 
-      const videoElement = document.querySelector('video');
-      if ((!duration || duration <= 0) && videoElement && !isNaN(videoElement.duration) && videoElement.duration > 0) {
-        duration = Math.floor(videoElement.duration);
+      if (videoElement) {
+        if ((!duration || duration <= 0) && !isNaN(videoElement.duration) && videoElement.duration > 0 && isFinite(videoElement.duration)) {
+          duration = Math.floor(videoElement.duration);
+        }
+        if (currentTime === 0 && !isNaN(videoElement.currentTime) && videoElement.currentTime >= 0) {
+          currentTime = Math.floor(videoElement.currentTime);
+        }
       }
-      if (videoElement && !isNaN(videoElement.currentTime) && videoElement.currentTime >= 0) {
-        currentTime = Math.floor(videoElement.currentTime);
+
+      if (duration > 0 && currentTime >= duration) {
+        currentTime = 0;
       }
 
       let isPlaying = false;
-      if (playPauseButton && playPauseButton.title) {
-        isPlaying = playPauseButton.title === 'Pause'; 
-      } else if (videoElement) {
-        isPlaying = !videoElement.paused && !videoElement.ended;
+      if (videoElement) {
+        isPlaying = !videoElement.paused && !videoElement.ended && videoElement.readyState > 1;
+      }
+      if (playPauseButton) {
+        const titleAttr = (playPauseButton.getAttribute('title') || playPauseButton.title || '').toLowerCase();
+        const ariaLabel = (playPauseButton.getAttribute('aria-label') || '').toLowerCase();
+        if (titleAttr.includes('pause') || ariaLabel.includes('pause')) {
+          isPlaying = true;
+        } else if (titleAttr.includes('play') || ariaLabel.includes('play')) {
+          if (!videoElement) isPlaying = false;
+        }
       }
 
-      return { track, artist, albumArtUrl, currentTime, duration, isPlaying };
+      return { track, artist, albumArtUrl, currentTime, duration, isPlaying, userIsSeeking };
     }
   } catch (error) {
-    console.error('ContentScript: Error in getCurrentTrackInfo:', error);
+    console.error('[YTM RPC Content] Error in getCurrentTrackInfo:', error);
   }
   return null;
 }
@@ -147,18 +188,14 @@ let lastSentIsPlaying = null;
 let lastSentCurrentTime = null;
 let lastSentTimestamp = null;
 let updateDebounceTimer = null;
-let trackChangeGracePeriodActive = false;
-let trackChangeGracePeriodTimer = null;
 let pauseGracePeriodTimer = null;
 let pauseGracePeriodExpired = false;
-let durationWaitAttempts = 0;
+let consecutiveNoTrackCount = 0;
 
 let navigationFinishListener = null;
 let playerBarObserver = null;
 let periodicInterval = null;
 let currentObservedVideo = null;
-
-let trackSettlingUntil = 0;
 let userIsSeeking = false;
 
 function onUserSeekStart() {
@@ -184,7 +221,7 @@ function removeVideoListeners(video) {
 }
 
 function attachVideoListeners() {
-  const video = document.querySelector('video');
+  const video = findVideoElement();
   if (video && video !== currentObservedVideo) {
     if (currentObservedVideo) {
       removeVideoListeners(currentObservedVideo);
@@ -220,11 +257,6 @@ function cleanup() {
     updateDebounceTimer = null;
   }
   
-  if (trackChangeGracePeriodTimer) {
-    clearTimeout(trackChangeGracePeriodTimer);
-    trackChangeGracePeriodTimer = null;
-  }
-  
   if (pauseGracePeriodTimer) {
     clearTimeout(pauseGracePeriodTimer);
     pauseGracePeriodTimer = null;
@@ -250,7 +282,6 @@ function cleanup() {
     currentObservedVideo = null;
   }
   
-  durationWaitAttempts = 0;
   isExtensionContextValid = false;
 }
 
@@ -276,38 +307,9 @@ function updateTrackInfo(forceSend = false) {
     const currentTrackInfo = getCurrentTrackInfo();
 
     if (currentTrackInfo) {
+      consecutiveNoTrackCount = 0;
       const now = Date.now();
-      const isNewTrack = currentTrackInfo.track !== lastSentTrack;
-      const videoElement = document.querySelector('video');
-
-      if (isNewTrack) {
-        trackSettlingUntil = now + 3000;
-        lastSentDuration = null;
-        lastSentCurrentTime = 0;
-        lastSentTimestamp = now;
-        currentTrackInfo.currentTime = 0;
-      }
-
-      const isSettling = now < trackSettlingUntil;
-      if (isSettling && !userIsSeeking) {
-        if (currentTrackInfo.currentTime > 5 || (videoElement && videoElement.currentTime > 5)) {
-          currentTrackInfo.currentTime = 0;
-        } else if (currentTrackInfo.currentTime <= 5 && videoElement && !videoElement.ended && videoElement.currentTime <= 5) {
-          trackSettlingUntil = 0;
-        }
-      }
-
-      if (currentTrackInfo.duration > 0 && currentTrackInfo.currentTime >= currentTrackInfo.duration) {
-        currentTrackInfo.currentTime = 0;
-      }
-
-      if (currentTrackInfo.duration === 0 && durationWaitAttempts < 4) {
-        durationWaitAttempts++;
-        clearTimeout(updateDebounceTimer);
-        updateDebounceTimer = setTimeout(() => updateTrackInfo(true), 150);
-        return;
-      }
-      durationWaitAttempts = 0;
+      const isNewTrack = currentTrackInfo.track !== lastSentTrack || currentTrackInfo.artist !== lastSentArtist;
 
       let isPlayingToSend = currentTrackInfo.isPlaying;
 
@@ -331,22 +333,27 @@ function updateTrackInfo(forceSend = false) {
       }
 
       let isTimeShifted = false;
-      if (!isSettling && currentTrackInfo.currentTime !== undefined && lastSentCurrentTime !== null && lastSentTimestamp !== null) {
+      if (!isNewTrack && typeof currentTrackInfo.currentTime === 'number' && typeof lastSentCurrentTime === 'number' && lastSentTimestamp !== null) {
         const elapsedSinceLastSend = (now - lastSentTimestamp) / 1000;
         const expectedCurrentTime = isPlayingToSend ? (lastSentCurrentTime + elapsedSinceLastSend) : lastSentCurrentTime;
-        if (Math.abs(currentTrackInfo.currentTime - expectedCurrentTime) > 2) {
+        const timeDiff = Math.abs(currentTrackInfo.currentTime - expectedCurrentTime);
+
+        // Ignore frozen DOM artifact (0:00) when song is progressing normally
+        const isSpuriousZero = currentTrackInfo.currentTime === 0 && expectedCurrentTime > 3 && !userIsSeeking;
+        if (!isSpuriousZero && timeDiff > 3.5) {
           isTimeShifted = true;
         }
       }
 
-      if (forceSend ||
+      const shouldSend = forceSend ||
           isNewTrack ||
           currentTrackInfo.artist !== lastSentArtist ||
           currentTrackInfo.albumArtUrl !== lastSentAlbumArtUrl ||
           currentTrackInfo.duration !== lastSentDuration ||
           isPlayingToSend !== lastSentIsPlaying ||
-          isTimeShifted) {
-          
+          isTimeShifted;
+
+      if (shouldSend) {
         const dataToSend = { ...currentTrackInfo, isPlaying: isPlayingToSend };
         sendMessageToBackgroundScript(dataToSend);
         
@@ -359,24 +366,27 @@ function updateTrackInfo(forceSend = false) {
         lastSentTimestamp = now;
       }
     } else {
-      if (lastSentTrack !== null || lastSentAlbumArtUrl !== null) {
-        sendMessageToBackgroundScript({ type: 'NO_TRACK' });
-        lastSentTrack = null;
-        lastSentArtist = null;
-        lastSentAlbumArtUrl = null;
-        lastSentDuration = null;
-        lastSentIsPlaying = null;
-        lastSentCurrentTime = null;
-        lastSentTimestamp = null;
-        trackSettlingUntil = 0;
-        if (pauseGracePeriodTimer) {
-          clearTimeout(pauseGracePeriodTimer);
-          pauseGracePeriodTimer = null;
+      consecutiveNoTrackCount++;
+      // Wait for 3 consecutive empty polls before declaring no track
+      if (consecutiveNoTrackCount >= 3) {
+        if (lastSentTrack !== null || lastSentAlbumArtUrl !== null) {
+          sendMessageToBackgroundScript({ type: 'NO_TRACK' });
+          lastSentTrack = null;
+          lastSentArtist = null;
+          lastSentAlbumArtUrl = null;
+          lastSentDuration = null;
+          lastSentIsPlaying = null;
+          lastSentCurrentTime = null;
+          lastSentTimestamp = null;
+          if (pauseGracePeriodTimer) {
+            clearTimeout(pauseGracePeriodTimer);
+            pauseGracePeriodTimer = null;
+          }
+          pauseGracePeriodExpired = false;
         }
-        pauseGracePeriodExpired = false;
       }
     }
-  }, 100);
+  }, 250);
 }
 
 updateTrackInfo(true);
@@ -389,8 +399,6 @@ navigationFinishListener = () => {
   lastSentIsPlaying = null;
   lastSentCurrentTime = null;
   lastSentTimestamp = null;
-  clearTimeout(trackChangeGracePeriodTimer);
-  trackChangeGracePeriodActive = false;
   if (pauseGracePeriodTimer) {
     clearTimeout(pauseGracePeriodTimer);
     pauseGracePeriodTimer = null;
@@ -425,4 +433,6 @@ periodicInterval = setInterval(() => {
 
 window.__ytmRpcCleanup = cleanup;
 })();
+
+
 
