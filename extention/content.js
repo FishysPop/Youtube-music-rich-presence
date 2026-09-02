@@ -370,15 +370,42 @@ function getCurrentTrackInfo() {
     const isAd = isAdPlaying() || isAdTrack({ track, artist });
 
     let playlistId = null;
+    let playlistIndex = null;
+    let nextVideoId = null;
+
     try {
       const urlParams = new URLSearchParams(window.location.search);
       const list = urlParams.get('list');
       if (list && typeof list === 'string') {
         playlistId = list;
       }
+      const idx = urlParams.get('index');
+      if (idx !== null && !isNaN(Number(idx))) {
+        playlistIndex = parseInt(idx, 10);
+      }
     } catch (e) {}
 
-    return { track, artist, album, albumArtUrl, currentTime, duration, isPlaying, userIsSeeking, videoId, repeatMode, isAd, playlistId };
+    const app = document.querySelector('ytmusic-app');
+    if (playlistIndex === null && app && typeof app.getState === 'function') {
+      try {
+        const q = app.getState().queue;
+        if (q && typeof q.selectedItemIndex === 'number' && q.selectedItemIndex >= 0) {
+          playlistIndex = q.selectedItemIndex;
+        }
+      } catch (e) {}
+    }
+
+    const domItems = Array.from(document.querySelectorAll('ytmusic-player-queue-item'));
+    const currentIdx = domItems.findIndex(el => el.selected);
+    if (playlistIndex === null && currentIdx !== -1) {
+      playlistIndex = currentIdx;
+    }
+
+    if (currentIdx !== -1 && domItems[currentIdx + 1] && domItems[currentIdx + 1].data) {
+      nextVideoId = domItems[currentIdx + 1].data.videoId || null;
+    }
+
+    return { track, artist, album, albumArtUrl, currentTime, duration, isPlaying, userIsSeeking, videoId, repeatMode, isAd, playlistId, playlistIndex, nextVideoId };
   } catch (error) {
     console.error('[YTM RPC Content] Error in getCurrentTrackInfo:', error);
   }
@@ -596,7 +623,7 @@ function formatTime(sec) {
   return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
 
-function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, isPlaying, playlistId) {
+function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, isPlaying, playlistId, playlistIndex, nextVideoId) {
   if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     console.warn(`[Listen Together] Cannot navigate: invalid or missing videoId (${videoId})`);
     return;
@@ -621,6 +648,8 @@ function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, 
     action: 'LOAD_VIDEO',
     videoId: videoId,
     playlistId: playlistId || undefined,
+    playlistIndex: typeof playlistIndex === 'number' ? playlistIndex : undefined,
+    nextVideoId: nextVideoId || undefined,
     track: trackTitle,
     artist: artist,
     albumArtUrl: albumArtUrl,
@@ -648,7 +677,7 @@ function handleRemoteSyncAction(packet) {
     if (lastAdTargetPacket) {
       if (lastAdTargetPacket.videoId && (lastAdTargetPacket.videoId !== getCurrentVideoId() || lastAdTargetPacket.videoId !== lastSyncedVideoId)) {
         console.log(`[Listen Together Listener] Catching up after ad: navigating to ${lastAdTargetPacket.videoId}`);
-        navigateToVideo(lastAdTargetPacket.videoId, lastAdTargetPacket.track, lastAdTargetPacket.artist, lastAdTargetPacket.albumArtUrl, lastAdTargetPacket.currentTime, lastAdTargetPacket.isPlaying, lastAdTargetPacket.playlistId);
+        navigateToVideo(lastAdTargetPacket.videoId, lastAdTargetPacket.track, lastAdTargetPacket.artist, lastAdTargetPacket.albumArtUrl, lastAdTargetPacket.currentTime, lastAdTargetPacket.isPlaying, lastAdTargetPacket.playlistId, lastAdTargetPacket.playlistIndex, lastAdTargetPacket.nextVideoId);
         return;
       }
     }
@@ -732,7 +761,7 @@ function handleRemoteTrackChange(packet) {
 
   if (packet.videoId && (packet.videoId !== lastSyncedVideoId || (currentVid && packet.videoId !== currentVid))) {
     console.log(`[Listen Together Listener] Triggering navigation for: "${packet.track}" (ID: ${packet.videoId})`);
-    navigateToVideo(packet.videoId, packet.track, packet.artist, packet.albumArtUrl, packet.currentTime, packet.isPlaying, packet.playlistId);
+    navigateToVideo(packet.videoId, packet.track, packet.artist, packet.albumArtUrl, packet.currentTime, packet.isPlaying, packet.playlistId, packet.playlistIndex, packet.nextVideoId);
   }
 }
 

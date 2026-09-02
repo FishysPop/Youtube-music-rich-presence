@@ -133,6 +133,27 @@ test('sanitizePacket preserves and sanitizes playlistId', () => {
     assert.strictEqual(sanitizedLong.playlistId.length, 100);
 });
 
+test('sanitizePacket preserves and sanitizes playlistIndex and nextVideoId', () => {
+    const packet = {
+        type: 'SYNC_STATE',
+        videoId: 'dQw4w9WgXcQ',
+        playlistIndex: 3,
+        nextVideoId: 'kJQP7kiw5Fk'
+    };
+    const sanitized = sanitizePacket(packet);
+    assert.notStrictEqual(sanitized, null);
+    assert.strictEqual(sanitized.playlistIndex, 3);
+    assert.strictEqual(sanitized.nextVideoId, 'kJQP7kiw5Fk');
+
+    // Rejects invalid playlistIndex (negative, NaN, non-integer)
+    assert.strictEqual(sanitizePacket({ type: 'SYNC_STATE', playlistIndex: -1 }).playlistIndex, undefined);
+    assert.strictEqual(sanitizePacket({ type: 'SYNC_STATE', playlistIndex: 'abc' }).playlistIndex, undefined);
+    assert.strictEqual(sanitizePacket({ type: 'SYNC_STATE', playlistIndex: 3.5 }).playlistIndex, undefined);
+
+    // Rejects invalid nextVideoId
+    assert.strictEqual(sanitizePacket({ type: 'SYNC_STATE', nextVideoId: 'invalid_id!' }).nextVideoId, undefined);
+});
+
 test('sanitizePacket rejects packets with malicious or invalid fields', () => {
     // Malicious video ID
     assert.strictEqual(sanitizePacket({

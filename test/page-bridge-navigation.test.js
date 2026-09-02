@@ -26,7 +26,7 @@ async function runAllTests() {
   }
 }
 
-function buildWatchEndpoint(videoId, currentTime, playlistId) {
+function buildWatchEndpoint(videoId, currentTime, playlistId, playlistIndex) {
   const seconds = Math.floor(currentTime || 0);
   const endpoint = {
     watchEndpoint: {
@@ -39,6 +39,9 @@ function buildWatchEndpoint(videoId, currentTime, playlistId) {
   if (playlistId && typeof playlistId === 'string') {
     endpoint.watchEndpoint.playlistId = playlistId;
   }
+  if (typeof playlistIndex === 'number' && Number.isInteger(playlistIndex) && playlistIndex >= 0) {
+    endpoint.watchEndpoint.index = playlistIndex;
+  }
   return endpoint;
 }
 
@@ -48,7 +51,7 @@ function shouldCollapsePlayerPage(wasPlayerPageOpen, currentPath) {
   return true;
 }
 
-function buildLoadVideoMessage(videoId, trackTitle, artist, albumArtUrl, currentTime, isPlaying, playlistId) {
+function buildLoadVideoMessage(videoId, trackTitle, artist, albumArtUrl, currentTime, isPlaying, playlistId, playlistIndex, nextVideoId) {
   const msg = {
     source: 'ytm-sync-isolated',
     action: 'LOAD_VIDEO',
@@ -62,7 +65,35 @@ function buildLoadVideoMessage(videoId, trackTitle, artist, albumArtUrl, current
   if (playlistId && typeof playlistId === 'string') {
     msg.playlistId = playlistId;
   }
+  if (typeof playlistIndex === 'number' && Number.isInteger(playlistIndex) && playlistIndex >= 0) {
+    msg.playlistIndex = playlistIndex;
+  }
+  if (nextVideoId && typeof nextVideoId === 'string') {
+    msg.nextVideoId = nextVideoId;
+  }
   return msg;
+}
+
+function determineSkipStrategy({ targetVideoId, currentIdx, queueItems }) {
+  if (!targetVideoId) return 'none';
+  if (!Array.isArray(queueItems) || queueItems.length === 0) return 'endpoint_navigation';
+
+  const nextItem = currentIdx >= 0 && currentIdx + 1 < queueItems.length ? queueItems[currentIdx + 1] : null;
+  if (nextItem && nextItem.videoId === targetVideoId) {
+    return 'native_next';
+  }
+
+  const prevItem = currentIdx > 0 && currentIdx - 1 < queueItems.length ? queueItems[currentIdx - 1] : null;
+  if (prevItem && prevItem.videoId === targetVideoId) {
+    return 'native_prev';
+  }
+
+  const matchIdx = queueItems.findIndex((item, idx) => idx !== currentIdx && item.videoId === targetVideoId);
+  if (matchIdx !== -1) {
+    return 'queue_jump';
+  }
+
+  return 'endpoint_navigation';
 }
 
 function executeTieredNavigation(app, watchEndpoint, windowObj) {
@@ -112,7 +143,7 @@ function executeTieredNavigation(app, watchEndpoint, windowObj) {
   return 'none';
 }
 
-function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, playlistId, player, app, windowObj }) {
+function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, playlistId, playlistIndex, queueItems, currentQueueIdx, nextBtn, prevBtn, player, app, windowObj }) {
   if (currentVid === videoId) {
     if (typeof currentTime === 'number' && player && typeof player.seekTo === 'function') {
       player.seekTo(currentTime, true);
@@ -125,7 +156,34 @@ function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, pl
     return { actionTaken: 'same_video_in_place' };
   }
 
-  const watchEndpoint = buildWatchEndpoint(videoId, currentTime, playlistId).watchEndpoint;
+  const items = Array.isArray(queueItems) ? queueItems : [];
+  const curIdx = typeof currentQueueIdx === 'number' ? currentQueueIdx : -1;
+
+  const nextItem = curIdx !== -1 && curIdx + 1 < items.length ? items[curIdx + 1] : null;
+  if (nextItem && nextItem.videoId === videoId) {
+    if (nextBtn && typeof nextBtn.click === 'function') {
+      nextBtn.click();
+      return { actionTaken: 'native_next' };
+    }
+  }
+
+  const prevItem = curIdx > 0 && curIdx - 1 < items.length ? items[curIdx - 1] : null;
+  if (prevItem && prevItem.videoId === videoId) {
+    if (prevBtn && typeof prevBtn.click === 'function') {
+      prevBtn.click();
+      return { actionTaken: 'native_prev' };
+    }
+  }
+
+  if (items.length > 0) {
+    const matchingItem = items.find(it => it.videoId === videoId);
+    if (matchingItem && matchingItem.playBtn && typeof matchingItem.playBtn.click === 'function') {
+      matchingItem.playBtn.click();
+      return { actionTaken: 'queue_jump' };
+    }
+  }
+
+  const watchEndpoint = buildWatchEndpoint(videoId, currentTime, playlistId, playlistIndex).watchEndpoint;
   const navMethod = executeTieredNavigation(app, watchEndpoint, windowObj);
 
   return { actionTaken: 'navigated', navMethod, watchEndpoint };
@@ -365,6 +423,166 @@ test('handleBridgeLoadVideo triggers SPA navigation when a new videoId is receiv
       videoId: 'newVideo2222',
       startTimeSeconds: 5,
       playlistId: 'RDmix123'
+    }
+  });
+});
+
+test('buildWatchEndpoint includes playlistIndex when valid integer >= 0', () => {
+  const ep = buildWatchEndpoint('kJQP7kiw5Fk', 0, 'PL12345', 4);
+  assert.strictEqual(ep.watchEndpoint.index, 4);
+
+  const epNoIndex = buildWatchEndpoint('kJQP7kiw5Fk', 0, 'PL12345', null);
+  assert.strictEqual(epNoIndex.watchEndpoint.index, undefined);
+
+  const epNegIndex = buildWatchEndpoint('kJQP7kiw5Fk', 0, 'PL12345', -1);
+  assert.strictEqual(epNegIndex.watchEndpoint.index, undefined);
+});
+
+test('buildLoadVideoMessage includes playlistIndex and nextVideoId when provided', () => {
+  const msg = buildLoadVideoMessage('kJQP7kiw5Fk', 'Title', 'Artist', null, 0, true, 'PL12345', 2, 'nextVid1111');
+  assert.strictEqual(msg.playlistIndex, 2);
+  assert.strictEqual(msg.nextVideoId, 'nextVid1111');
+});
+
+test('determineSkipStrategy selects native_next when target is immediate next song', () => {
+  const queueItems = [
+    { videoId: 'vid0' },
+    { videoId: 'vid1' },
+    { videoId: 'vid2' }
+  ];
+  const strat = determineSkipStrategy({
+    targetVideoId: 'vid2',
+    currentIdx: 1,
+    queueItems
+  });
+  assert.strictEqual(strat, 'native_next');
+});
+
+test('determineSkipStrategy selects native_prev when target is immediate previous song', () => {
+  const queueItems = [
+    { videoId: 'vid0' },
+    { videoId: 'vid1' },
+    { videoId: 'vid2' }
+  ];
+  const strat = determineSkipStrategy({
+    targetVideoId: 'vid0',
+    currentIdx: 1,
+    queueItems
+  });
+  assert.strictEqual(strat, 'native_prev');
+});
+
+test('determineSkipStrategy selects queue_jump when target is elsewhere in queue', () => {
+  const queueItems = [
+    { videoId: 'vid0' },
+    { videoId: 'vid1' },
+    { videoId: 'vid2' },
+    { videoId: 'vid3' },
+    { videoId: 'vid4' }
+  ];
+  const strat = determineSkipStrategy({
+    targetVideoId: 'vid4',
+    currentIdx: 1,
+    queueItems
+  });
+  assert.strictEqual(strat, 'queue_jump');
+});
+
+test('determineSkipStrategy falls back to endpoint_navigation when target is not in queue', () => {
+  const queueItems = [
+    { videoId: 'vid0' },
+    { videoId: 'vid1' }
+  ];
+  const strat = determineSkipStrategy({
+    targetVideoId: 'vidUnqueued',
+    currentIdx: 0,
+    queueItems
+  });
+  assert.strictEqual(strat, 'endpoint_navigation');
+
+  const emptyStrat = determineSkipStrategy({
+    targetVideoId: 'vidUnqueued',
+    currentIdx: -1,
+    queueItems: []
+  });
+  assert.strictEqual(emptyStrat, 'endpoint_navigation');
+});
+
+test('handleBridgeLoadVideo clicks native next button when target is next track', () => {
+  let nextClicked = false;
+  const nextBtn = { click: () => { nextClicked = true; } };
+  const queueItems = [{ videoId: 'vid1' }, { videoId: 'vid2' }];
+
+  const res = handleBridgeLoadVideo({
+    currentVid: 'vid1',
+    videoId: 'vid2',
+    queueItems,
+    currentQueueIdx: 0,
+    nextBtn
+  });
+
+  assert.strictEqual(res.actionTaken, 'native_next');
+  assert.strictEqual(nextClicked, true);
+});
+
+test('handleBridgeLoadVideo clicks native previous button when target is previous track', () => {
+  let prevClicked = false;
+  const prevBtn = { click: () => { prevClicked = true; } };
+  const queueItems = [{ videoId: 'vid1' }, { videoId: 'vid2' }];
+
+  const res = handleBridgeLoadVideo({
+    currentVid: 'vid2',
+    videoId: 'vid1',
+    queueItems,
+    currentQueueIdx: 1,
+    prevBtn
+  });
+
+  assert.strictEqual(res.actionTaken, 'native_prev');
+  assert.strictEqual(prevClicked, true);
+});
+
+test('handleBridgeLoadVideo clicks in-queue item play button when target is elsewhere in queue', () => {
+  let playClicked = false;
+  const queueItems = [
+    { videoId: 'vid0' },
+    { videoId: 'vid1' },
+    { videoId: 'vid2', playBtn: { click: () => { playClicked = true; } } }
+  ];
+
+  const res = handleBridgeLoadVideo({
+    currentVid: 'vid0',
+    videoId: 'vid2',
+    queueItems,
+    currentQueueIdx: 0
+  });
+
+  assert.strictEqual(res.actionTaken, 'queue_jump');
+  assert.strictEqual(playClicked, true);
+});
+
+test('handleBridgeLoadVideo navigates with playlistId and index when unqueued', () => {
+  let navPayload = null;
+  const app = {
+    handleNavigationEndpoint: (p) => { navPayload = p; }
+  };
+
+  const res = handleBridgeLoadVideo({
+    currentVid: 'vid0',
+    videoId: 'vidUnqueued',
+    playlistId: 'PLmix999',
+    playlistIndex: 5,
+    queueItems: [{ videoId: 'vid0' }],
+    currentQueueIdx: 0,
+    app
+  });
+
+  assert.strictEqual(res.actionTaken, 'navigated');
+  assert.deepStrictEqual(navPayload, {
+    watchEndpoint: {
+      videoId: 'vidUnqueued',
+      playlistId: 'PLmix999',
+      index: 5
     }
   });
 });

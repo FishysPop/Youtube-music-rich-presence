@@ -66,6 +66,19 @@ function sanitizePacket(packet) {
         }
     }
 
+    if (packet.playlistIndex !== undefined && packet.playlistIndex !== null) {
+        const idx = Number(packet.playlistIndex);
+        if (Number.isInteger(idx) && idx >= 0 && idx <= 10000) {
+            sanitized.playlistIndex = idx;
+        }
+    }
+
+    if (packet.nextVideoId !== undefined && packet.nextVideoId !== null) {
+        if (typeof packet.nextVideoId === 'string' && validateVideoId(packet.nextVideoId)) {
+            sanitized.nextVideoId = packet.nextVideoId;
+        }
+    }
+
     if (packet.currentTime !== undefined && packet.currentTime !== null) {
         const time = Number(packet.currentTime);
         if (isNaN(time) || !isFinite(time) || time < 0 || time > 86400) return null;
