@@ -181,7 +181,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (currentActivity && currentActivity.details) {
-      songInfoText = `${currentActivity.details} - ${currentActivity.state}`;
+      songInfoText = currentActivity.album
+        ? `${currentActivity.details} - ${currentActivity.state} (${currentActivity.album})`
+        : `${currentActivity.details} - ${currentActivity.state}`;
     } else {
       songInfoText = "Waiting for music...";
     }
@@ -250,6 +252,143 @@ document.addEventListener("DOMContentLoaded", () => {
         message.currentActivity,
         message
       );
+    }
+  });
+
+  // --- Listen Together UI Elements ---
+  const listenSessionBadge = document.getElementById("listenSessionBadge");
+  const listenIdleView = document.getElementById("listenIdleView");
+  const listenActiveView = document.getElementById("listenActiveView");
+  const startSessionBtn = document.getElementById("startSessionBtn");
+  const joinRoomInput = document.getElementById("joinRoomInput");
+  const joinSessionBtn = document.getElementById("joinSessionBtn");
+  const activeRoomCode = document.getElementById("activeRoomCode");
+  const copyInviteBtn = document.getElementById("copyInviteBtn");
+  const sessionStatusDetail = document.getElementById("sessionStatusDetail");
+  const leaveSessionBtn = document.getElementById("leaveSessionBtn");
+  const autoStopSelect = document.getElementById("autoStopSelect");
+
+  if (autoStopSelect) {
+    chrome.storage.local.get({ autoStopHostingTimeoutMinutes: 30 }, (result) => {
+      autoStopSelect.value = String(result.autoStopHostingTimeoutMinutes ?? 30);
+    });
+
+    autoStopSelect.addEventListener("change", () => {
+      const val = parseInt(autoStopSelect.value, 10);
+      chrome.storage.local.set({ autoStopHostingTimeoutMinutes: isNaN(val) ? 30 : val });
+    });
+  }
+
+  function updateListenSessionUI(state) {
+    if (!listenSessionBadge || !listenIdleView || !listenActiveView) return;
+
+    if (!state || state.role === 'NONE' || !state.roomId) {
+      listenSessionBadge.textContent = "Idle";
+      listenSessionBadge.className = "status-value disconnected";
+      listenIdleView.style.display = "block";
+      listenActiveView.style.display = "none";
+    } else if (state.isHost) {
+      const count = state.peerCount || 0;
+      listenSessionBadge.textContent = count > 0 ? "Hosting" : "Waiting";
+      listenSessionBadge.className = count > 0 ? "status-value connected" : "status-value pending";
+      listenIdleView.style.display = "none";
+      listenActiveView.style.display = "block";
+      if (activeRoomCode) activeRoomCode.textContent = state.roomId;
+      if (sessionStatusDetail) {
+        if (state.peers && state.peers.length > 0) {
+          const names = state.peers.map(p => p.name).join(', ');
+          sessionStatusDetail.textContent = `Listeners: ${names}`;
+        } else {
+          sessionStatusDetail.textContent = count > 0 
+            ? `${count} friend${count === 1 ? '' : 's'} connected` 
+            : "Waiting for friends to join...";
+        }
+      }
+    } else {
+      const isConnected = state.status === 'connected' || (state.peerCount && state.peerCount > 0);
+      listenSessionBadge.textContent = isConnected ? "Synced" : "Connecting";
+      listenSessionBadge.className = isConnected ? "status-value connected" : "status-value pending";
+      listenIdleView.style.display = "none";
+      listenActiveView.style.display = "block";
+      if (activeRoomCode) activeRoomCode.textContent = state.roomId;
+      if (sessionStatusDetail) {
+        if (isConnected) {
+          const hostName = state.hostName || 'Host';
+          sessionStatusDetail.textContent = `Listening with ${hostName}`;
+        } else {
+          sessionStatusDetail.textContent = "Connecting to host over WebRTC...";
+        }
+      }
+    }
+  }
+
+  function queryListenSessionStatus() {
+    chrome.runtime.sendMessage({ type: "GET_LISTEN_SESSION_STATUS" }, (res) => {
+      const err = chrome.runtime.lastError;
+      if (!err && res && res.role) {
+        updateListenSessionUI(res);
+      } else {
+        updateListenSessionUI(null);
+      }
+    });
+  }
+
+  queryListenSessionStatus();
+
+  if (startSessionBtn) {
+    startSessionBtn.addEventListener("click", () => {
+      startSessionBtn.disabled = true;
+      chrome.runtime.sendMessage({ type: "START_LISTEN_SESSION" }, (res) => {
+        const err = chrome.runtime.lastError;
+        startSessionBtn.disabled = false;
+        queryListenSessionStatus();
+      });
+    });
+  }
+
+  if (joinSessionBtn && joinRoomInput) {
+    joinSessionBtn.addEventListener("click", () => {
+      const code = joinRoomInput.value.trim().toUpperCase();
+      if (!code) return;
+      joinSessionBtn.disabled = true;
+      chrome.runtime.sendMessage({ type: "JOIN_LISTEN_SESSION", roomId: code }, (res) => {
+        const err = chrome.runtime.lastError;
+        joinSessionBtn.disabled = false;
+        joinRoomInput.value = "";
+        queryListenSessionStatus();
+      });
+    });
+  }
+
+  if (leaveSessionBtn) {
+    leaveSessionBtn.addEventListener("click", () => {
+      leaveSessionBtn.disabled = true;
+      chrome.runtime.sendMessage({ type: "LEAVE_LISTEN_SESSION" }, () => {
+        const err = chrome.runtime.lastError;
+        leaveSessionBtn.disabled = false;
+        queryListenSessionStatus();
+      });
+    });
+  }
+
+  if (copyInviteBtn && activeRoomCode) {
+    copyInviteBtn.addEventListener("click", () => {
+      const code = activeRoomCode.textContent.trim();
+      const inviteUrl = `https://music.youtube.com/#ytm-session=${code}`;
+      navigator.clipboard.writeText(inviteUrl).then(() => {
+        copyInviteBtn.textContent = "Copied!";
+        setTimeout(() => {
+          copyInviteBtn.textContent = "Copy Link";
+        }, 2000);
+      }).catch(() => {
+        prompt("Copy invite link:", inviteUrl);
+      });
+    });
+  }
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message && (message.type === "LISTEN_SESSION_UPDATE" || message.type === "LISTEN_SESSION_STATUS")) {
+      queryListenSessionStatus();
     }
   });
 

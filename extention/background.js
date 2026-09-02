@@ -31,6 +31,10 @@ let currentSongActivity = null;
 let pausedTimestamp = null;
 let pauseTimeoutId = null;
 
+let activeSessionRole = 'NONE';
+let activeSessionRoomId = null;
+let activeSessionPeerCount = 0;
+
 chrome.storage.local.get({
     userDisconnected: false,
     isPauseHidden: false,
@@ -97,6 +101,9 @@ function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, 
     }
     if (rpcUser !== undefined) {
         currentRpcUser = rpcUser;
+        if (rpcUser) {
+            chrome.storage.local.set({ discordUser: rpcUser });
+        }
     }
     if (hostVersion !== undefined) {
         nativeHostVersion = hostVersion;
@@ -510,21 +517,47 @@ function processNewActivity(message) {
 
     if (isDifferentSong) {
         shouldUpdatePresence = true;
+        const directOrSearchUrl = (message.videoId && /^[a-zA-Z0-9_-]{11}$/.test(message.videoId))
+            ? `https://music.youtube.com/watch?v=${message.videoId}`
+            : `https://music.youtube.com/search?q=${encodeURIComponent(`${message.artist} ${message.track}`)}`;
+
+        const buttons = (activeSessionRoomId && activeSessionRole === 'HOST') ? [
+            { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${activeSessionRoomId}` },
+            { label: "Link", url: directOrSearchUrl }
+        ] : [
+            { label: "Link", url: directOrSearchUrl },
+            { label: "GitHub", url: "https://github.com/FishysPop/Youtube-music-rich-presence" }
+        ];
+
+        const largeImageText = (message.album && message.album.trim())
+            ? `${message.track} • ${message.album.trim()}`
+            : (message.albumArtUrl ? `${message.track} - ${message.artist}` : 'YouTube Music');
+
+        const smallImageKey = message.repeatMode === 'ONE' ? 'repeat_one' : 'play';
+        const smallImageText = message.repeatMode === 'ONE' ? 'On Loop' : 'Playing';
+
         currentSongActivity = {
             details: message.track,
             state: message.artist,
+            album: message.album || null,
+            videoId: message.videoId || null,
+            repeatMode: message.repeatMode || 'NONE',
             largeImageKey: message.albumArtUrl ? message.albumArtUrl.replace(/w\d+-h\d+/, 'w512-h512') : null,
-            largeImageText: message.albumArtUrl ? `${message.track} - ${message.artist}` : 'YouTube Music',
-            smallImageKey: 'play',
-            smallImageText: 'Playing',
+            largeImageText: largeImageText,
+            smallImageKey: smallImageKey,
+            smallImageText: smallImageText,
             albumArtUrl: message.albumArtUrl || null,
-            buttons: [
-                { label: "Link", url: `https://music.youtube.com/search?q=${encodeURIComponent(`${message.artist} ${message.track}`)}` },
-                { label: "GitHub", url: "https://github.com/FishysPop/Youtube-music-rich-presence" }
-            ],
-            statusDisplayType : 2,
+            buttons: buttons,
+            statusDisplayType: 2,
             type: 2
         };
+
+        if (activeSessionRoomId && activeSessionRole === 'HOST') {
+            currentSongActivity.party = {
+                id: activeSessionRoomId,
+                size: [activeSessionPeerCount + 1, 10]
+            };
+        }
         let initCurrentTime = 0;
         if (message.userIsSeeking && typeof message.currentTime === 'number' && message.currentTime > 0) {
             initCurrentTime = message.currentTime;
@@ -561,6 +594,34 @@ function processNewActivity(message) {
             currentSongActivity.albumArtUrl = message.albumArtUrl;
             currentSongActivity.largeImageKey = message.albumArtUrl.replace(/w\d+-h\d+/, 'w512-h512');
             shouldUpdatePresence = true;
+        }
+
+        if (message.album && message.album !== currentSongActivity.album) {
+            currentSongActivity.album = message.album;
+            currentSongActivity.largeImageText = `${currentSongActivity.details} • ${message.album.trim()}`;
+            shouldUpdatePresence = true;
+        }
+
+        if (message.videoId && message.videoId !== currentSongActivity.videoId) {
+            currentSongActivity.videoId = message.videoId;
+            const directOrSearchUrl = `https://music.youtube.com/watch?v=${message.videoId}`;
+            currentSongActivity.buttons = (activeSessionRoomId && activeSessionRole === 'HOST') ? [
+                { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${activeSessionRoomId}` },
+                { label: "Link", url: directOrSearchUrl }
+            ] : [
+                { label: "Link", url: directOrSearchUrl },
+                { label: "GitHub", url: "https://github.com/FishysPop/Youtube-music-rich-presence" }
+            ];
+            shouldUpdatePresence = true;
+        }
+
+        if (message.repeatMode && message.repeatMode !== currentSongActivity.repeatMode) {
+            currentSongActivity.repeatMode = message.repeatMode;
+            if (pausedTimestamp === null) {
+                currentSongActivity.smallImageKey = message.repeatMode === 'ONE' ? 'repeat_one' : 'play';
+                currentSongActivity.smallImageText = message.repeatMode === 'ONE' ? 'On Loop' : 'Playing';
+                shouldUpdatePresence = true;
+            }
         }
 
         if (typeof message.currentTime === 'number' && !isNaN(message.currentTime) && message.currentTime >= 0) {
@@ -621,8 +682,8 @@ function processNewActivity(message) {
         pauseHideTargetTime = null;
         isPauseHidden = false;
         chrome.storage.local.set({ pausedTimestamp: null, pauseHideTargetTime: null, isPauseHidden: false });
-        currentSongActivity.smallImageKey = 'play';
-        currentSongActivity.smallImageText = 'Playing';
+        currentSongActivity.smallImageKey = currentSongActivity.repeatMode === 'ONE' ? 'repeat_one' : 'play';
+        currentSongActivity.smallImageText = currentSongActivity.repeatMode === 'ONE' ? 'On Loop' : 'Playing';
         shouldUpdatePresence = true;
         
         if (pauseTimeoutId) {
@@ -802,6 +863,23 @@ function periodicConnectionCheck() {
 
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message && (message.type === 'FORWARD_LOG_BATCH' || message.type === 'FORWARD_LOG')) {
+    const tabLabel = sender && sender.tab && sender.tab.id ? `[Tab ${sender.tab.id}]` : '[Content]';
+    if (message.type === 'FORWARD_LOG_BATCH' && Array.isArray(message.logs)) {
+      for (const item of message.logs) {
+        const level = item.level && typeof console[item.level] === 'function' ? item.level : 'log';
+        const args = Array.isArray(item.args) ? item.args : [item.args];
+        console[level](tabLabel, ...args);
+      }
+    } else if (message.type === 'FORWARD_LOG') {
+      const level = message.level && typeof console[message.level] === 'function' ? message.level : 'log';
+      const args = Array.isArray(message.args) ? message.args : [message.args];
+      console[level](tabLabel, ...args);
+    }
+    if (sendResponse) sendResponse({ received: true });
+    return false;
+  }
+
   if (sender.tab && sender.tab.url && sender.tab.url.includes("music.youtube.com")) {
     console.log('[YTM RPC Background] Received message from YouTube Music tab:', {
       tabId: sender.tab.id,
@@ -821,6 +899,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message && message.track && message.artist) {
+      if (activeSessionRoomId && activeSessionRole !== 'NONE') {
+        console.log(`[YTM RPC Background] Activity update [Listen Together ${activeSessionRole} in ${activeSessionRoomId}]: "${message.track}" by "${message.artist}"`);
+      }
       processNewActivity(message);
       if (sendResponse) sendResponse({ status: "Activity info processed by background" });
       return false; 
@@ -829,8 +910,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         processClearActivity();
         if (sendResponse) sendResponse({ status: "No track detected, clear processed by background" });
         return false; 
-    } else {
+    } else if (message && message.type === 'LISTEN_SESSION_UPDATE') {
+        console.log(`[YTM RPC Background] Listen Together update: role=${message.role}, room=${message.roomId}, peers=${message.peerCount}`);
+        activeSessionRole = message.role || 'NONE';
+        activeSessionRoomId = message.roomId || null;
+        activeSessionPeerCount = message.peerCount || 0;
+        if (currentSongActivity) {
+            if (activeSessionRoomId && activeSessionRole === 'HOST') {
+                currentSongActivity.buttons = [
+                    { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${activeSessionRoomId}` },
+                    { label: "Link", url: `https://music.youtube.com/search?q=${encodeURIComponent(`${currentSongActivity.state} ${currentSongActivity.details}`)}` }
+                ];
+                currentSongActivity.party = {
+                    id: activeSessionRoomId,
+                    size: [activeSessionPeerCount + 1, 10]
+                };
+            } else {
+                currentSongActivity.buttons = [
+                    { label: "Link", url: `https://music.youtube.com/search?q=${encodeURIComponent(`${currentSongActivity.state} ${currentSongActivity.details}`)}` },
+                    { label: "GitHub", url: "https://github.com/FishysPop/Youtube-music-rich-presence" }
+                ];
+                delete currentSongActivity.party;
+            }
+            if (isRpcReady && port) {
+                _sendSetActivityToNativeHost(currentSongActivity);
+            }
+        }
+        return false;
+    } else if (message && message.type === 'LISTEN_SESSION_STATUS') {
+        console.log(`[YTM RPC Background] Listen Together status: status=${message.status}, role=${message.role}, room=${message.roomId}, peers=${message.peerCount}`);
+        activeSessionRole = message.role || 'NONE';
+        activeSessionRoomId = message.roomId || null;
+        activeSessionPeerCount = message.peerCount || 0;
+        return false;
     }
+  } else if (message && (message.type === 'START_LISTEN_SESSION' || message.type === 'JOIN_LISTEN_SESSION' || message.type === 'LEAVE_LISTEN_SESSION' || message.type === 'GET_LISTEN_SESSION_STATUS')) {
+      chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
+          if (chrome.runtime.lastError || !tabs || tabs.length === 0) {
+              if (sendResponse) sendResponse({ success: false, role: 'NONE', error: 'No YouTube Music tab found.' });
+              return;
+          }
+          const targetTab = tabs.find(t => t.active) || tabs[0];
+          chrome.tabs.sendMessage(targetTab.id, message, (resp) => {
+              const err = chrome.runtime.lastError;
+              if (err) {
+                  if (sendResponse) sendResponse({ success: false, role: 'NONE', error: err.message });
+              } else {
+                  if (sendResponse) sendResponse(resp || { success: true });
+              }
+          });
+      });
+      return true;
   } else if (message && message.type === 'GET_STATUS') { 
       const activityForPopup = pendingActivity || currentActivity || null;
       if (sendResponse) {
@@ -911,20 +1041,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 function reInjectContentScripts() {
-  chrome.tabs.query({ url: "*://music.youtube.com/*", status: "complete" }, (tabs) => {
+  chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
     if (chrome.runtime.lastError) {
       console.warn("Background: Error querying YouTube Music tabs for re-injection:", chrome.runtime.lastError.message);
       return;
     }
     if (tabs && tabs.length > 0) {
-      console.log(`Background: Found ${tabs.length} YouTube Music tab(s) to potentially re-inject content script.`);
+      console.log(`Background: Found ${tabs.length} YouTube Music tab(s) to re-inject content script.`);
       tabs.forEach((tab) => {
         if (tab.id) {
           chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            files: ['content.js']
+            files: ['page-bridge.js'],
+            world: 'MAIN'
+          }).catch(() => {});
+
+          chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['log-forwarder.js', 'webrtc-sync.js', 'content.js']
           }).then(() => {
-            console.log(`Background: Successfully re-injected content script into tab ${tab.id} (${tab.url ? tab.url.substring(0, 50) + '...' : 'URL not available'}).`);
+            console.log(`Background: Successfully re-injected content scripts into tab ${tab.id}.`);
           }).catch(err => {
             if (!err.message.toLowerCase().includes('frame with id 0 was not found') && 
                 !err.message.toLowerCase().includes('cannot access a chrome extension url') &&

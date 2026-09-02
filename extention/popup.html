@@ -1,200 +1,437 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>YT Music RPC Status</title>
-  <style>
-    *, *::before, *::after {
-      box-sizing: border-box;
-    }
-    :root {
-      --bg: #181a20;
-      --panel: #23262f;
-      --accent: #7289da;
-      --text: #f5f6fa;
-      --text-muted: #b9bbbe;
-      --border: #282b36;
-      --success: #43b581;
-      --error: #f04747;
-      --pending: #faa61a;
-    }
-    html, body {
-      width: 270px;
-      margin: 0;
-      padding: 0;
-      background: var(--bg);
-    }
-    body {
-      font-family: 'Segoe UI', 'Roboto', Arial, sans-serif;
-      color: var(--text);
-      padding: 12px;
-      font-size: 13px;
-      overflow-x: hidden;
-      overflow-y: auto;
-      max-height: 580px;
-    }
-    a {
-      color: #9ec5fe;
-      font-weight: 600;
-      text-decoration: underline;
-    }
-    a:hover, a:focus {
-      color: #c6dcff;
-    }
-    h3 {
-      margin-top: 0;
-      margin-bottom: 12px;
-      font-size: 1.1em;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      color: var(--accent);
-      text-align: center;
-    }
-    .status-section {
-      background: var(--panel);
-      border-radius: 10px;
-      margin-bottom: 10px;
-      padding: 10px 10px 8px 10px;
-      border: 1px solid var(--border);
-      box-shadow: 0 1px 4px 0 #0003;
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      transition: background 0.2s;
-    }
-    .status-section:last-child {
-      margin-bottom: 0;
-    }
-    .status-label {
-      font-weight: 600;
-      color: var(--text-muted);
-      font-size: 0.95em;
-      margin-bottom: 1px;
-    }
-    .status-value {
-      margin-left: 0;
-      font-size: 1em;
-      font-weight: 500;
-      letter-spacing: 0.1px;
-      border-radius: 6px;
-      padding: 2px 7px;
-      display: inline-block;
-      background: #23262f;
-      transition: color 0.2s, background 0.2s;
-      min-height: 1.2em;
-    }
-    .status-value.connected {
-      color: var(--success);
-      background: #232f23;
-    }
-    .status-value.disconnected {
-      color: var(--error);
-      background: #2f2323;
-    }
-    .status-value.pending {
-      color: var(--pending);
-      background: #2f2a23;
-    }
-    .song-info {
-      margin-top: 2px;
-      font-style: italic;
-      color: var(--text-muted);
-      font-size: 0.95em;
-      word-break: break-word;
-      min-height: 1.1em;
-    }
-    #currentSong {
-      min-height: 2.2em;
-    }
-    .button-row {
-      display: flex;
-      gap: 8px;
-      margin-top: 10px;
-      margin-bottom: 0;
-    }
-    button {
-      flex: 1 1 0;
-      padding: 6px 8px;
-      border: none;
-      border-radius: 8px; 
-      background: var(--accent);
-      color: #fff;
-      font-size: 0.9em; 
-      font-weight: 600;
-      cursor: pointer;
-      box-shadow: 0 2px 8px 0 #0002;
-      transition: background 0.18s, box-shadow 0.18s;
-      outline: none;
-      letter-spacing: 0.2px;
-    }
-    button:last-child {
-      background: #23262f; 
-      color: var(--accent);
-      border: 1px solid var(--accent);
-    }
-    button:hover, button:focus {
-      background: #5b6eae;
-      box-shadow: 0 4px 16px 0 #0003;
-    }
-    button:last-child:hover, button:last-child:focus {
-      background: #232f4a;
-      color: #aeb8e6;
-    }
-  </style>
-</head>
-<body>
-  <h3>YouTube Music Rich Presence</h3>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YT Music RPC Status</title>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      :root {
+        --bg: #181a20;
+        --panel: #23262f;
+        --accent: #7289da;
+        --text: #f5f6fa;
+        --text-muted: #b9bbbe;
+        --border: #282b36;
+        --success: #43b581;
+        --error: #f04747;
+        --pending: #faa61a;
+      }
+      html,
+      body {
+        width: 270px;
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+      }
+      body {
+        font-family: "Segoe UI", "Roboto", Arial, sans-serif;
+        color: var(--text);
+        padding: 12px;
+        font-size: 13px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        max-height: 580px;
+      }
+      a {
+        color: #9ec5fe;
+        font-weight: 600;
+        text-decoration: underline;
+      }
+      a:hover,
+      a:focus {
+        color: #c6dcff;
+      }
+      h3 {
+        margin-top: 0;
+        margin-bottom: 12px;
+        font-size: 1.1em;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        color: var(--accent);
+        text-align: center;
+      }
+      .status-section {
+        background: var(--panel);
+        border-radius: 10px;
+        margin-bottom: 10px;
+        padding: 10px 10px 8px 10px;
+        border: 1px solid var(--border);
+        box-shadow: 0 1px 4px 0 #0003;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        transition: background 0.2s;
+      }
+      .status-section:last-child {
+        margin-bottom: 0;
+      }
+      .status-label {
+        font-weight: 600;
+        color: var(--text-muted);
+        font-size: 0.95em;
+        margin-bottom: 1px;
+      }
+      .status-value {
+        margin-left: 0;
+        font-size: 1em;
+        font-weight: 500;
+        letter-spacing: 0.1px;
+        border-radius: 6px;
+        padding: 2px 7px;
+        display: inline-block;
+        background: #23262f;
+        transition:
+          color 0.2s,
+          background 0.2s;
+        min-height: 1.2em;
+      }
+      .status-value.connected {
+        color: var(--success);
+        background: #232f23;
+      }
+      .status-value.disconnected {
+        color: var(--error);
+        background: #2f2323;
+      }
+      .status-value.pending {
+        color: var(--pending);
+        background: #2f2a23;
+      }
+      .song-info {
+        margin-top: 2px;
+        font-style: italic;
+        color: var(--text-muted);
+        font-size: 0.95em;
+        word-break: break-word;
+        min-height: 1.1em;
+      }
+      #currentSong {
+        min-height: 2.2em;
+      }
+      .button-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+        margin-bottom: 0;
+      }
+      button {
+        flex: 1 1 0;
+        padding: 6px 8px;
+        border: none;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        font-size: 0.9em;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 2px 8px 0 #0002;
+        transition:
+          background 0.18s,
+          box-shadow 0.18s;
+        outline: none;
+        letter-spacing: 0.2px;
+      }
+      button:last-child {
+        background: #23262f;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+      }
+      button:hover,
+      button:focus {
+        background: #5b6eae;
+        box-shadow: 0 4px 16px 0 #0003;
+      }
+      button:last-child:hover,
+      button:last-child:focus {
+        background: #232f4a;
+        color: #aeb8e6;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>YouTube Music Rich Presence</h3>
 
-  <div class="status-section">
-    <span class="status-label">Native Host:</span>
-    <span id="nativeHostStatus" class="status-value">Checking...</span>
-  </div>
-
-  <div class="status-section">
-    <span class="status-label">Discord RPC:</span>
-    <span id="rpcStatus" class="status-value">Checking...</span>
-    <div id="rpcUser" class="song-info" style="font-size: 0.95em;">&nbsp;</div>
-  </div>
-
-  <div class="status-section">
-    <span class="status-label">Current Song:</span>
-    <div id="currentSong" class="song-info">Waiting for music...</div>
-  </div>
-
-  <div id="nativeHostWarning" class="status-section" style="display: none;">
-    <span class="status-label" style="color: var(--error); margin-bottom: 5px;">Native Host Issue</span>
-    <p style="margin: 2px 0 5px 0; font-size: 0.9em; color: var(--text-muted);">
-      Could not connect. Please ensure the helper application is installed and running.
-    </p>
-    <p style="margin: 0; font-size: 0.9em;">
-      <a href="https://github.com/FishysPop/Youtube-music-rich-presence/releases" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: underline;">
-        Download from GitHub Releases
-      </a>
-    </p>
-  </div>
-
-  <div class="button-row">
-    <button id="reconnectButton">Reconnect</button>
-    <button id="openOptionsButton">Options</button>
-  </div>
-
-  <div id="optionsPanel" style="display:none; background:#181a20; color:#faa61a; border:1px solid #faa61a; border-radius:8px; margin-top:10px; padding:10px; max-height:180px; overflow:auto; font-size:0.95em;">
-    <div style="font-weight:bold; margin-bottom:6px; color:#faa61a;">Options</div>
-    <div style="margin-top: 10px; margin-bottom: 10px; display: flex; align-items: center;">
-      <label for="autoReconnectCheckbox" style="margin-right: 8px; cursor: pointer;">Auto Reconnect:</label>
-      <input type="checkbox" id="autoReconnectCheckbox" style="cursor: pointer;">
+    <div class="status-section">
+      <span class="status-label">Native Host:</span>
+      <span id="nativeHostStatus" class="status-value">Checking...</span>
     </div>
-    <div style="margin-top: 10px; margin-bottom: 10px; display: flex; align-items: center;">
-      <label for="pauseTimeoutInput" style="margin-right: 8px; cursor: pointer;">Hide after paused (min):</label>
-      <input type="number" id="pauseTimeoutInput" style="cursor: pointer; width: 45px; padding: 2px 5px; background: #23262f; color: var(--text); border: 1px solid var(--border); border-radius: 4px;" min="-1" max="60" value="-1">
-    </div>
-    <div style="margin-bottom:8px; color:#faa61a; font-weight:bold;">Error Log</div>
-    <pre id="logContent" style="white-space:pre-wrap;word-break:break-all;margin:0; color:#faa61a; background:#23262f; border-radius:6px; padding:6px; max-height:70px; overflow:auto;"></pre>
-    <button id="hideOptionsButton" style="margin-top:10px;float:right;background:#23262f;color:#faa61a;border:1px solid #faa61a;">Close</button>
-  </div>
 
-  <script src="popup.js"></script>
-</body>
+    <div class="status-section">
+      <span class="status-label">Discord RPC:</span>
+      <span id="rpcStatus" class="status-value">Checking...</span>
+      <div id="rpcUser" class="song-info" style="font-size: 0.95em">&nbsp;</div>
+    </div>
+
+    <div class="status-section">
+      <span class="status-label">Current Song:</span>
+      <div id="currentSong" class="song-info">Waiting for music...</div>
+    </div>
+
+    <div class="status-section" id="listenTogetherSection">
+      <div
+        style="
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 4px;
+        "
+      >
+        <span class="status-label">
+          Listen Together</span
+        >
+        <span
+          id="listenSessionBadge"
+          class="status-value disconnected"
+          style="font-size: 0.85em; padding: 1px 5px"
+          >Idle</span
+        >
+      </div>
+
+      <div id="listenIdleView">
+        <div style="display: flex; gap: 6px; margin-top: 4px">
+          <button
+            id="startSessionBtn"
+            style="padding: 5px 8px; font-size: 0.85em"
+          >
+            Host Session
+          </button>
+        </div>
+        <div style="display: flex; gap: 6px; margin-top: 6px">
+          <input
+            type="text"
+            id="joinRoomInput"
+            placeholder="Room Code (YTM-XXXXXX)"
+            style="
+              flex: 1;
+              min-width: 0;
+              padding: 4px 6px;
+              background: #181a20;
+              color: var(--text);
+              border: 1px solid var(--border);
+              border-radius: 6px;
+              font-size: 0.85em;
+              text-transform: uppercase;
+            "
+          />
+          <button
+            id="joinSessionBtn"
+            style="flex: 0 0 50px; padding: 5px 8px; font-size: 0.85em"
+          >
+            Join
+          </button>
+        </div>
+      </div>
+
+      <div id="listenActiveView" style="display: none; margin-top: 4px">
+        <div
+          style="
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #181a20;
+            padding: 6px 8px;
+            border-radius: 6px;
+            margin-bottom: 6px;
+          "
+        >
+          <span
+            style="font-weight: bold; color: var(--text); font-size: 0.95em"
+            id="activeRoomCode"
+            >YTM-XXXXXX</span
+          >
+          <button
+            id="copyInviteBtn"
+            style="padding: 2px 6px; font-size: 0.8em; flex: initial"
+          >
+            Copy Link
+          </button>
+        </div>
+        <div
+          id="sessionStatusDetail"
+          class="song-info"
+          style="margin-bottom: 6px; font-size: 0.85em"
+        >
+          0 friends connected
+        </div>
+        <button
+          id="leaveSessionBtn"
+          style="
+            width: 100%;
+            background: #2f2323;
+            color: var(--error);
+            border: 1px solid var(--error);
+            padding: 5px 8px;
+            font-size: 0.85em;
+          "
+        >
+          Leave Session
+        </button>
+      </div>
+    </div>
+
+    <div id="nativeHostWarning" class="status-section" style="display: none">
+      <span class="status-label" style="color: var(--error); margin-bottom: 5px"
+        >Native Host Issue</span
+      >
+      <p
+        style="margin: 2px 0 5px 0; font-size: 0.9em; color: var(--text-muted)"
+      >
+        Could not connect. Please ensure the helper application is installed and
+        running.
+      </p>
+      <p style="margin: 0; font-size: 0.9em">
+        <a
+          href="https://github.com/FishysPop/Youtube-music-rich-presence/releases"
+          target="_blank"
+          rel="noopener noreferrer"
+          style="color: var(--accent); text-decoration: underline"
+        >
+          Download from GitHub Releases
+        </a>
+      </p>
+    </div>
+
+    <div class="button-row">
+      <button id="reconnectButton">Reconnect</button>
+      <button id="openOptionsButton">Options</button>
+    </div>
+
+    <div
+      id="optionsPanel"
+      style="
+        display: none;
+        background: #181a20;
+        color: #faa61a;
+        border: 1px solid #faa61a;
+        border-radius: 8px;
+        margin-top: 10px;
+        padding: 10px;
+        max-height: 180px;
+        overflow: auto;
+        font-size: 0.95em;
+      "
+    >
+      <div style="font-weight: bold; margin-bottom: 6px; color: #faa61a">
+        Options
+      </div>
+      <div
+        style="
+          margin-top: 10px;
+          margin-bottom: 10px;
+          display: flex;
+          align-items: center;
+        "
+      >
+        <label
+          for="autoReconnectCheckbox"
+          style="margin-right: 8px; cursor: pointer"
+          >Auto Reconnect:</label
+        >
+        <input
+          type="checkbox"
+          id="autoReconnectCheckbox"
+          style="cursor: pointer"
+        />
+      </div>
+      <div
+        style="
+          margin-top: 10px;
+          margin-bottom: 10px;
+          display: flex;
+          align-items: center;
+        "
+      >
+        <label
+          for="pauseTimeoutInput"
+          style="margin-right: 8px; cursor: pointer"
+          >Hide after paused (min):</label
+        >
+        <input
+          type="number"
+          id="pauseTimeoutInput"
+          style="
+            cursor: pointer;
+            width: 45px;
+            padding: 2px 5px;
+            background: #23262f;
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+          "
+          min="-1"
+          max="60"
+          value="-1"
+        />
+      </div>
+      <div
+        style="
+          margin-top: 10px;
+          margin-bottom: 12px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        "
+      >
+        <label
+          for="autoStopSelect"
+          style="margin-right: 8px; cursor: pointer"
+          >Auto-stop when empty:</label
+        >
+        <select
+          id="autoStopSelect"
+          style="
+            cursor: pointer;
+            padding: 2px 5px;
+            background: #23262f;
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 0.9em;
+            outline: none;
+          "
+        >
+          <option value="15">15 min</option>
+          <option value="30" selected>30 min</option>
+          <option value="60">1 hour</option>
+          <option value="0">Never</option>
+        </select>
+      </div>
+      <div style="margin-bottom: 8px; color: #faa61a; font-weight: bold">
+        Error Log
+      </div>
+      <pre
+        id="logContent"
+        style="
+          white-space: pre-wrap;
+          word-break: break-all;
+          margin: 0;
+          color: #faa61a;
+          background: #23262f;
+          border-radius: 6px;
+          padding: 6px;
+          max-height: 70px;
+          overflow: auto;
+        "
+      ></pre>
+      <button
+        id="hideOptionsButton"
+        style="
+          margin-top: 10px;
+          float: right;
+          background: #23262f;
+          color: #faa61a;
+          border: 1px solid #faa61a;
+        "
+      >
+        Close
+      </button>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
 </html>
-

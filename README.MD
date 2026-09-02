@@ -4,94 +4,98 @@
 
 Displays your YouTube Music activity as your Discord Rich Presence. This Chrome extension needs a native host app to communicate with Discord.
 
-## ✅ Prerequisites
+## Prerequisites
 
-*   **Google Chrome** (Official Support) or Chromium-based browsers (**Microsoft Edge**, **Brave** - Beta Support).
-*   The **YouTube Music Rich Presence Native Host** application.
+- **Google Chrome** (Official Support) or Chromium-based browsers (**Microsoft Edge**, **Brave** - Beta Support).
+- The **YouTube Music Rich Presence Native Host** application.
 
-## 🚀 Installation
+## Installation
 
 You need to install two things: the Native Host and the Browser Extension.
 
 ### 1. Native Host Application
 
-*   Go to the **Releases Page** of this GitHub repository.
-*   Download `YouTubeMusicRPCSetup.exe` from the latest release.
-*   Run `YouTubeMusicRPCSetup.exe` and follow the on-screen instructions to install the native host application. This will register it with your browser.
-*   After installation, the native application (e.g., `youtube_music_rpc.exe`) should run automatically in the background when needed.
+- Go to the **Releases Page** of this GitHub repository.
+- Download `YouTubeMusicRPCSetup.exe` from the latest release.
+- Run `YouTubeMusicRPCSetup.exe` and follow the on-screen instructions to install the native host application. This will register it with your browser.
+- After installation, the native application (e.g., `youtube_music_rpc.exe`) should run automatically in the background when needed.
 
-### 2. 🌐 Browser Extension (Chrome, Edge & Brave)
+### 2. Browser Extension (Chrome, Edge & Brave)
 
-*   **Option A: Chrome Web Store (Recommended)**
-    *   [Chrome Web Store Link](https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb)
-    *   *Note for Edge and Brave users:* You can install directly from the Chrome Web Store by allowing extensions from other stores when prompted.
-*   **Option B: Manual Installation (Sideloading)**
-    1.  Download or clone this repository.
-    2.  Extract the ZIP file if you downloaded it.
-    3.  Open the extensions page in your browser:
-        *   **Chrome:** `chrome://extensions`
-        *   **Edge:** `edge://extensions`
-        *   **Brave:** `brave://extensions`
-    4.  Enable **Developer mode** (usually a toggle in the top-right or sidebar).
-    5.  Click the **"Load unpacked"** button.
-    6.  Select the `extention` subfolder from this repository.
-    7.  The extension should now be listed and active.
+- **Option A: Chrome Web Store (Recommended)**
+  - [Chrome Web Store Link](https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb)
+  - _Note for Edge and Brave users:_ You can install directly from the Chrome Web Store by allowing extensions from other stores when prompted.
+- **Option B: Manual Installation (Sideloading)**
+  1.  Download or clone this repository.
+  2.  Extract the ZIP file if you downloaded it.
+  3.  Open the extensions page in your browser:
+      - **Chrome:** `chrome://extensions`
+      - **Edge:** `edge://extensions`
+      - **Brave:** `brave://extensions`
+  4.  Enable **Developer mode** (usually a toggle in the top-right or sidebar).
+  5.  Click the **"Load unpacked"** button.
+  6.  Select the `extention` subfolder from this repository.
+  7.  The extension should now be listed and active.
 
-## ✨ Features
+## Features
 
-*   **🎤 Real-time Updates:** Shows the song, artist, and album art currently playing on YouTube Music.
-*   **Discord Integration:** Updates your Discord status with your listening activity.
-*   **Extension Popup Controls:**
-    *   Shows Native Host & Discord connection status.
-    *   Displays current song.
-*   **Interactive Discord Presence:** Buttons in your Discord presence to:
-    *   Link directly to the song on YouTube Music.
-    *   Link to this project's GitHub page.
+- **Listen Together (Listen Along):** Synchronize playback with friends in real-time using a privacy-preserving Pure Broker Relay over TLS WebSockets (zero IP exposure).
+  - **Host or Join:** Generate a 6-character room code or share a direct invite link (`https://music.youtube.com/#ytm-session=YTM-XXXXXX`).
+  - **Discord Integration:** Adds a "Listen Along" button and party status to your Discord Rich Presence.
+  - **3-Tier Adaptive Drift Compensation:** Eliminates latency smoothly without audio popping or stuttering.
+- **Discord Integration:** Updates your Discord status with your listening activity.
+- **Extension Popup Controls:**
+  - Shows Native Host & Discord connection status.
+  - Displays current song and active Listen Together room.
+- **Interactive Discord Presence:** Buttons in your Discord presence to:
+  - Join Listen Along session directly from Discord.
+  - Link directly to the song on YouTube Music.
+  - Link to this project's GitHub page.
 
-## ⚙️ How it Works
+## How it Works
 
 This system has two parts:
 
 1.  **Chrome Extension (this project's `/extention` folder):**
-    *   **Content Script:** Identifies track, artist, and album art on `music.youtube.com`.
-    *   **Background Script:** Handles logic, talks to the content script, and the native host.
-    *   **Popup UI:** Shows status and offers controls.
+    - **Content Script:** Identifies track, artist, and album art on `music.youtube.com`.
+    - **Background Script:** Handles logic, talks to the content script, and the native host.
+    - **Popup UI:** Shows status and offers controls.
 
 2.  **Native Host Application (companion program):**
-    *   A separate program the extension uses to talk to Discord.
-    *   Interacts with your Discord client to update Rich Presence.
-    *   Download from this repository's releases.
+    - A separate program the extension uses to talk to Discord.
+    - Interacts with your Discord client to update Rich Presence.
+    - Download from this repository's releases.
 
-## ▶️ Usage
+## Usage
 
 1.  **Start the Native Host application.**
 2.  **Ensure the extension is enabled** in `chrome://extensions`.
 3.  **Play a song on YouTube Music.**
 4.  **Your Discord status should update.**
 5.  **Use the extension popup:**
-    *   Click the extension's icon in your browser toolbar.
-    *   View connection status and current song.
-    *   Use "Reconnect" if there are issues.
-    *   Use "Disconnect" to stop sharing your activity.
-    *   Click "Options" for auto-reconnect, logs, or to open the main options page.
+    - Click the extension's icon in your browser toolbar.
+    - View connection status and current song.
+    - Use "Reconnect" if there are issues.
+    - Use "Disconnect" to stop sharing your activity.
+    - Click "Options" for auto-reconnect, logs, or to open the main options page.
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
-*   **Popup shows "Native Host Issue" or "Could not connect":**
-    *   Ensure the **Native Host Application** is installed correctly from Releases.
-    *   Check if the native app (e.g., `youtube_music_rpc.exe`) is running (use Task Manager/Activity Monitor).
-    *   Try re-running `YouTubeMusicRPCSetup.exe`.
-    *   Click the "Reconnect" button in the extension popup.
-    *   Restart your browser.
+- **Popup shows "Native Host Issue" or "Could not connect":**
+  - Ensure the **Native Host Application** is installed correctly from Releases.
+  - Check if the native app (e.g., `youtube_music_rpc.exe`) is running (use Task Manager/Activity Monitor).
+  - Try re-running `YouTubeMusicRPCSetup.exe`.
+  - Click the "Reconnect" button in the extension popup.
+  - Restart your browser.
 
-*   **Native Host is "Connected" but RPC Status is "Disconnected" or "Connecting...":**
-    *   Ensure your Discord desktop client is running and you are logged in.
-    *   The native host might have trouble with Discord. Check native host logs if you can.
-    *   Restart Discord, then the native host, then click "Reconnect" in the popup.
+- **Native Host is "Connected" but RPC Status is "Disconnected" or "Connecting...":**
+  - Ensure your Discord desktop client is running and you are logged in.
+  - The native host might have trouble with Discord. Check native host logs if you can.
+  - Restart Discord, then the native host, then click "Reconnect" in the popup.
 
-*   **Song information is not updating in Discord:**
-    *   Make sure the active tab is `music.youtube.com` and a song is playing.
-    *   Try refreshing the YouTube Music page.
-    *   Check the extension popup for any error messages or status changes.
-    *   Check browser console (F12 -> Console) on YouTube Music for "[YTMusicRPC Content]" errors.
-    *   Check extension's background console: `chrome://extensions` -> Details -> "Inspect views: service worker" (or "background page").
+- **Song information is not updating in Discord:**
+  - Make sure the active tab is `music.youtube.com` and a song is playing.
+  - Try refreshing the YouTube Music page.
+  - Check the extension popup for any error messages or status changes.
+  - Check browser console (F12 -> Console) on YouTube Music for "[YTMusicRPC Content]" errors.
+  - Check extension's background console: `chrome://extensions` -> Details -> "Inspect views: service worker" (or "background page").
