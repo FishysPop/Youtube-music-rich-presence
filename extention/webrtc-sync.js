@@ -191,7 +191,7 @@ function calculateDrift(localCurrentTime, remotePacket, localNow = Date.now()) {
     return expectedHostTime - localCurrentTime;
 }
 
-function determineSyncAction(driftMs, localIsPlaying, remoteIsPlaying, localCurrentTime, isAd = false) {
+function determineSyncAction(driftMs, localIsPlaying, remoteIsPlaying, localCurrentTime, isAd = false, preferSpeedAdjustment = false) {
     if (isAd) {
         return {
             action: 'NONE',
@@ -211,6 +211,19 @@ function determineSyncAction(driftMs, localIsPlaying, remoteIsPlaying, localCurr
         return {
             action: 'NONE',
             playbackRate: 1.0,
+            playPauseState,
+            driftMs
+        };
+    }
+
+    if (preferSpeedAdjustment && driftMs > 0 && driftMs <= 15000) {
+        let playbackRate = 1.05;
+        if (driftMs > 4000) playbackRate = 1.20;
+        else if (driftMs > 1200) playbackRate = 1.12;
+
+        return {
+            action: 'SOFT_SPEED_UP',
+            playbackRate,
             playPauseState,
             driftMs
         };

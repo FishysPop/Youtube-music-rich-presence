@@ -80,6 +80,50 @@
     };
   }
 
+  function injectUpcomingTracksIntoRedux(tracksToInject) {
+    if (!Array.isArray(tracksToInject) || tracksToInject.length === 0) return false;
+    const store = document.querySelector('ytmusic-player-bar')?.queue?.store?.store;
+    if (!store || typeof store.dispatch !== 'function') return false;
+
+    const domItems = Array.from(document.querySelectorAll('ytmusic-player-queue-item'));
+    let currentQueueIdx = domItems.findIndex(el => el.selected);
+    if (currentQueueIdx === -1) {
+      const p = document.getElementById('movie_player');
+      const curVid = p && typeof p.getVideoData === 'function' ? p.getVideoData()?.video_id : null;
+      if (curVid) {
+        currentQueueIdx = domItems.findIndex(el => el.data && el.data.videoId === curVid);
+      }
+    }
+
+    const targetIdx = currentQueueIdx !== -1 ? currentQueueIdx + 1 : 0;
+    const nextItem = currentQueueIdx !== -1 && domItems[currentQueueIdx + 1];
+    const nextVid = nextItem && nextItem.data ? nextItem.data.videoId : null;
+
+    if (nextVid === tracksToInject[0]?.videoId) {
+      return true;
+    }
+
+    const formattedItems = tracksToInject.slice(0, 2).map(formatUpcomingTrackItem).filter(Boolean);
+    if (formattedItems.length === 0) return false;
+
+    try {
+      store.dispatch({
+        type: 'ADD_ITEMS',
+        payload: {
+          index: targetIdx,
+          items: formattedItems,
+          nextQueueItemId: Math.floor(Math.random() * 100000),
+          shouldAssignIds: true
+        }
+      });
+      bridgeLog(`Injected ${formattedItems.length} upcoming track(s) into Redux queue at index ${targetIdx}`);
+      return true;
+    } catch (e) {
+      bridgeLog(`Failed to dispatch ADD_ITEMS to Redux queue: ${e.message}`);
+      return false;
+    }
+  }
+
   window.addEventListener('message', (event) => {
     if (event.source !== window || !event.data || event.data.source !== 'ytm-sync-isolated') return;
 
@@ -88,6 +132,7 @@
     if (action === 'SYNC_UPCOMING_TRACKS' && Array.isArray(upcomingTracks)) {
       window.__syncedUpcomingTracks = upcomingTracks.slice(0, 2);
       bridgeLog(`Synced upcoming tracks updated (count=${window.__syncedUpcomingTracks.length}): ${window.__syncedUpcomingTracks.map(t => t.videoId).join(', ')}`);
+      injectUpcomingTracksIntoRedux(window.__syncedUpcomingTracks);
       return;
     }
 
@@ -124,7 +169,10 @@
       }
 
       const domQueueItems = Array.from(document.querySelectorAll('ytmusic-player-queue-item'));
-      const currentQueueIdx = domQueueItems.findIndex(el => el.selected);
+      let currentQueueIdx = domQueueItems.findIndex(el => el.selected);
+      if (currentQueueIdx === -1 && currentVid) {
+        currentQueueIdx = domQueueItems.findIndex(el => el.data && el.data.videoId === currentVid);
+      }
 
       let handledViaNativeSkip = false;
 
@@ -167,6 +215,30 @@
           if (typeof playBtn.click === 'function') {
             bridgeLog(`Using in-queue selection for track: ${videoId}`);
             playBtn.click();
+            handledViaNativeSkip = true;
+          }
+        }
+      }
+
+      if (!handledViaNativeSkip) {
+        const trackToInject = {
+          videoId,
+          title: track || 'Track',
+          artist: artist || ''
+        };
+        const tracks = [trackToInject];
+        if (Array.isArray(upcomingTracks) && upcomingTracks.length > 0) {
+          for (const u of upcomingTracks) {
+            if (u.videoId !== videoId && tracks.length < 2) tracks.push(u);
+          }
+        }
+
+        const injected = injectUpcomingTracksIntoRedux(tracks);
+        if (injected) {
+          const nextBtn = playerBar ? (playerBar.querySelector('.next-button') || playerBar.querySelector('#next-button')) : document.querySelector('ytmusic-player-bar .next-button');
+          if (nextBtn && typeof nextBtn.click === 'function') {
+            bridgeLog(`Injected ${videoId} at next position in Redux; triggering native next button`);
+            nextBtn.click();
             handledViaNativeSkip = true;
           }
         }

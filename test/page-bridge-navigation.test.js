@@ -143,7 +143,7 @@ function executeTieredNavigation(app, watchEndpoint, windowObj) {
   return 'none';
 }
 
-function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, playlistId, playlistIndex, queueItems, currentQueueIdx, nextBtn, prevBtn, player, app, windowObj }) {
+function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, playlistId, playlistIndex, queueItems, currentQueueIdx, nextBtn, prevBtn, player, app, windowObj, store }) {
   if (currentVid === videoId) {
     if (typeof currentTime === 'number' && player && typeof player.seekTo === 'function') {
       player.seekTo(currentTime, true);
@@ -180,6 +180,15 @@ function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, pl
     if (matchingItem && matchingItem.playBtn && typeof matchingItem.playBtn.click === 'function') {
       matchingItem.playBtn.click();
       return { actionTaken: 'queue_jump' };
+    }
+  }
+
+  if (store && typeof store.dispatch === 'function' && nextBtn && typeof nextBtn.click === 'function') {
+    const action = buildReduxAddItemsAction(curIdx, [{ videoId }]);
+    if (action) {
+      store.dispatch(action);
+      nextBtn.click();
+      return { actionTaken: 'redux_inject_and_next' };
     }
   }
 
@@ -706,6 +715,49 @@ test('injectUpcomingTracksIntoWatchNext inserts max 2 upcoming tracks right afte
   // Third excess track is NOT inserted (strictly capped to 2)
   const hasExcess = contents.some(c => c.playlistPanelVideoRenderer.videoId === 'excessVid33');
   assert.strictEqual(hasExcess, false);
+});
+
+function buildReduxAddItemsAction(currentQueueIdx, upcomingTracks) {
+  if (!Array.isArray(upcomingTracks) || upcomingTracks.length === 0) return null;
+  const items = upcomingTracks.slice(0, 2).map(formatUpcomingTrackItem).filter(Boolean);
+  if (items.length === 0) return null;
+
+  const targetIndex = (typeof currentQueueIdx === 'number' && currentQueueIdx >= 0)
+    ? currentQueueIdx + 1
+    : 0;
+
+  return {
+    type: 'ADD_ITEMS',
+    payload: {
+      index: targetIndex,
+      items,
+      nextQueueItemId: Math.floor(Math.random() * 100000),
+      shouldAssignIds: true
+    }
+  };
+}
+
+test('buildReduxAddItemsAction builds ADD_ITEMS action at currentQueueIdx + 1 with max 2 items', () => {
+  const upcomingTracks = [
+    { videoId: 'DD9THuwNmZE', title: 'NIGHTMARE', artist: 'WesGhost' },
+    { videoId: 'nextVid2222', title: 'Second Upcoming', artist: 'Artist 2' },
+    { videoId: 'excessVid33', title: 'Excess Track', artist: 'Artist 3' }
+  ];
+
+  const action = buildReduxAddItemsAction(200, upcomingTracks);
+  assert.notStrictEqual(action, null);
+  assert.strictEqual(action.type, 'ADD_ITEMS');
+  assert.strictEqual(action.payload.index, 201);
+  assert.strictEqual(action.payload.items.length, 2);
+  assert.strictEqual(action.payload.items[0].playlistPanelVideoRenderer.videoId, 'DD9THuwNmZE');
+  assert.strictEqual(action.payload.items[1].playlistPanelVideoRenderer.videoId, 'nextVid2222');
+  assert.strictEqual(action.payload.shouldAssignIds, true);
+});
+
+test('buildReduxAddItemsAction handles currentQueueIdx -1 safely with index 0', () => {
+  const action = buildReduxAddItemsAction(-1, [{ videoId: 'DD9THuwNmZE' }]);
+  assert.notStrictEqual(action, null);
+  assert.strictEqual(action.payload.index, 0);
 });
 
 runAllTests();

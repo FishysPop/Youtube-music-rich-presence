@@ -728,8 +728,11 @@ function handleRemoteSyncAction(packet) {
   const driftMs = Math.round(driftSec * 1000);
   lastAppliedDriftMs = driftMs;
 
+  const isRecentTrackChange = (Date.now() - lastTrackChangeTime < 30000);
+  const preferSpeedAdjustment = isRecentTrackChange || (packet.type !== 'SEEK' && driftMs > 0 && driftMs <= 15000);
+
   const action = window.ytmDetermineSyncAction
-    ? window.ytmDetermineSyncAction(driftMs, !video.paused, packet.isPlaying, video.currentTime, currentIsAd)
+    ? window.ytmDetermineSyncAction(driftMs, !video.paused, packet.isPlaying, video.currentTime, currentIsAd, preferSpeedAdjustment)
     : { action: 'NONE' };
 
   updatePlayerBarButton();
@@ -750,9 +753,9 @@ function handleRemoteSyncAction(packet) {
   }
 
   if (action.action === 'SOFT_SPEED_UP') {
-    video.playbackRate = 1.05;
+    video.playbackRate = action.playbackRate || 1.05;
   } else if (action.action === 'SOFT_SLOW_DOWN') {
-    video.playbackRate = 0.95;
+    video.playbackRate = action.playbackRate || 0.95;
   } else if (action.action === 'NONE') {
     if (video.playbackRate !== 1.0) {
       video.playbackRate = 1.0;
