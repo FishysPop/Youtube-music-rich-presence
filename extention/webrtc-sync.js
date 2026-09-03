@@ -79,6 +79,17 @@ function sanitizePacket(packet) {
         }
     }
 
+    if (Array.isArray(packet.upcomingTracks)) {
+        sanitized.upcomingTracks = packet.upcomingTracks
+            .filter(item => item && typeof item.videoId === 'string' && validateVideoId(item.videoId))
+            .slice(0, 2)
+            .map(item => ({
+                videoId: item.videoId,
+                title: typeof item.title === 'string' ? item.title.slice(0, 150) : '',
+                artist: typeof item.artist === 'string' ? item.artist.slice(0, 150) : ''
+            }));
+    }
+
     if (packet.currentTime !== undefined && packet.currentTime !== null) {
         const time = Number(packet.currentTime);
         if (isNaN(time) || !isFinite(time) || time < 0 || time > 86400) return null;

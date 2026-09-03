@@ -1,18 +1,106 @@
 (() => {
   if (window.__ytmPageBridgeInstalled) return;
   window.__ytmPageBridgeInstalled = true;
-  console.log('[YTM Page Bridge] Script successfully installed in MAIN world');
+
+  function bridgeLog(msg) {
+    console.log(`[YTM Page Bridge] ${msg}`);
+    try {
+      window.postMessage({ source: 'ytm-page-bridge-log', message: msg }, '*');
+    } catch (e) {}
+  }
+
+  bridgeLog('Script successfully installed in MAIN world');
+
+  window.__syncedUpcomingTracks = [];
+
+  function formatUpcomingTrackItem(track) {
+    if (!track || !track.videoId) return null;
+    return {
+      playlistPanelVideoRenderer: {
+        title: { runs: [{ text: track.title || 'Track' }] },
+        longBylineText: { runs: [{ text: track.artist || '' }] },
+        shortBylineText: { runs: [{ text: track.artist || '' }] },
+        videoId: track.videoId,
+        selected: false,
+        navigationEndpoint: {
+          watchEndpoint: {
+            videoId: track.videoId
+          }
+        }
+      }
+    };
+  }
+
+  function injectUpcomingTracksIntoWatchNext(json, upcomingTracks) {
+    if (!json || !Array.isArray(upcomingTracks) || upcomingTracks.length === 0) return json;
+    const tabs = json.contents?.singleColumnMusicWatchNextResultsRenderer?.tabbedRenderer?.watchNextTabbedResultsRenderer?.tabs;
+    const playlistPanel = tabs?.[0]?.tabRenderer?.content?.musicQueueRenderer?.content?.playlistPanelRenderer;
+    if (!playlistPanel || !Array.isArray(playlistPanel.contents)) return json;
+
+    const validUpcoming = upcomingTracks.slice(0, 2).map(formatUpcomingTrackItem).filter(Boolean);
+    if (validUpcoming.length === 0) return json;
+
+    const activeIdx = playlistPanel.contents.findIndex(c => c.playlistPanelVideoRenderer?.selected);
+    const insertIdx = activeIdx !== -1 ? activeIdx + 1 : 1;
+
+    const upcomingVideoIds = new Set(validUpcoming.map(u => u.playlistPanelVideoRenderer.videoId));
+    const filteredContents = playlistPanel.contents.filter((c, idx) => {
+      if (idx === activeIdx) return true;
+      const vid = c.playlistPanelVideoRenderer?.videoId;
+      return !upcomingVideoIds.has(vid);
+    });
+
+    filteredContents.splice(insertIdx, 0, ...validUpcoming);
+    playlistPanel.contents = filteredContents;
+    return json;
+  }
+
+  if (!window.__ytmFetchHookInstalled) {
+    window.__ytmFetchHookInstalled = true;
+    const origFetch = window.fetch;
+    window.fetch = async function(...args) {
+      const res = await origFetch.apply(this, args);
+      const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url);
+
+      if (url && url.includes('/youtubei/v1/next') && Array.isArray(window.__syncedUpcomingTracks) && window.__syncedUpcomingTracks.length > 0) {
+        try {
+          const json = await res.clone().json();
+          const modifiedJson = injectUpcomingTracksIntoWatchNext(json, window.__syncedUpcomingTracks);
+          const modifiedBlob = new Blob([JSON.stringify(modifiedJson)], { type: 'application/json' });
+          return new Response(modifiedBlob, {
+            status: res.status,
+            statusText: res.statusText,
+            headers: res.headers
+          });
+        } catch (e) {
+          bridgeLog(`Error modifying /youtubei/v1/next response: ${e.message}`);
+        }
+      }
+      return res;
+    };
+  }
 
   window.addEventListener('message', (event) => {
     if (event.source !== window || !event.data || event.data.source !== 'ytm-sync-isolated') return;
 
-    const { action, videoId, currentTime, rate, isPlaying, track, artist, albumArtUrl } = event.data;
-    console.log(`[YTM Page Bridge] Received message from isolated world: action=${action}, videoId=${videoId}`);
+    const { action, videoId, currentTime, rate, isPlaying, track, artist, albumArtUrl, upcomingTracks } = event.data;
+
+    if (action === 'SYNC_UPCOMING_TRACKS' && Array.isArray(upcomingTracks)) {
+      window.__syncedUpcomingTracks = upcomingTracks.slice(0, 2);
+      bridgeLog(`Synced upcoming tracks updated (count=${window.__syncedUpcomingTracks.length}): ${window.__syncedUpcomingTracks.map(t => t.videoId).join(', ')}`);
+      return;
+    }
+
+    bridgeLog(`Received message from isolated world: action=${action}, videoId=${videoId}`);
     const player = document.getElementById('movie_player') ||
                    document.querySelector('ytmusic-player') ||
                    document.querySelector('#player');
 
     if (action === 'LOAD_VIDEO' && videoId) {
+      if (Array.isArray(upcomingTracks) && upcomingTracks.length > 0) {
+        window.__syncedUpcomingTracks = upcomingTracks.slice(0, 2);
+      }
+
       const app = document.querySelector('ytmusic-app');
       const playerBar = document.querySelector('ytmusic-player-bar');
 
@@ -20,10 +108,10 @@
         ? (player.getVideoData() || {}).video_id
         : null;
 
-      console.log(`[YTM Page Bridge] LOAD_VIDEO target=${videoId}, currently playing=${currentVid}`);
+      bridgeLog(`LOAD_VIDEO target=${videoId}, currently playing=${currentVid}`);
 
       if (currentVid === videoId) {
-        console.log(`[YTM Page Bridge] Video ${videoId} is already loaded. Adjusting playback state: currentTime=${currentTime}, isPlaying=${isPlaying}`);
+        bridgeLog(`Video ${videoId} is already loaded. Adjusting playback state: currentTime=${currentTime}, isPlaying=${isPlaying}`);
         if (typeof currentTime === 'number' && player && typeof player.seekTo === 'function') {
           player.seekTo(currentTime, true);
         }
@@ -45,10 +133,12 @@
         : null;
       const nextQueueVid = (nextQueueItem && nextQueueItem.data) ? nextQueueItem.data.videoId : null;
 
+      bridgeLog(`Checking queue skip options: currentQueueIdx=${currentQueueIdx}, nextQueueVid=${nextQueueVid}, target=${videoId}`);
+
       if (nextQueueVid === videoId) {
         const nextBtn = playerBar ? (playerBar.querySelector('.next-button') || playerBar.querySelector('#next-button')) : document.querySelector('ytmusic-player-bar .next-button');
         if (nextBtn && typeof nextBtn.click === 'function') {
-          console.log(`[YTM Page Bridge] Using native next button for pre-buffered track transition: ${videoId}`);
+          bridgeLog(`Using native next button for pre-buffered track transition: ${videoId}`);
           nextBtn.click();
           handledViaNativeSkip = true;
         }
@@ -63,7 +153,7 @@
         if (prevQueueVid === videoId) {
           const prevBtn = playerBar ? (playerBar.querySelector('.previous-button') || playerBar.querySelector('#previous-button')) : document.querySelector('ytmusic-player-bar .previous-button');
           if (prevBtn && typeof prevBtn.click === 'function') {
-            console.log(`[YTM Page Bridge] Using native previous button for track transition: ${videoId}`);
+            bridgeLog(`Using native previous button for track transition: ${videoId}`);
             prevBtn.click();
             handledViaNativeSkip = true;
           }
@@ -75,7 +165,7 @@
         if (matchingItem) {
           const playBtn = matchingItem.querySelector('#play-button, .play-button') || matchingItem;
           if (typeof playBtn.click === 'function') {
-            console.log(`[YTM Page Bridge] Using in-queue selection for track: ${videoId}`);
+            bridgeLog(`Using in-queue selection for track: ${videoId}`);
             playBtn.click();
             handledViaNativeSkip = true;
           }
@@ -83,6 +173,7 @@
       }
 
       if (!handledViaNativeSkip) {
+        bridgeLog(`Target track ${videoId} not in immediate queue (next was ${nextQueueVid}); falling back to SPA navigation`);
         const startSec = Math.floor(currentTime || 0);
         const watchEndpoint = {
           videoId: videoId
@@ -101,6 +192,7 @@
         if (app && typeof app.handleNavigationEndpoint === 'function') {
           try {
             app.handleNavigationEndpoint({ watchEndpoint });
+            bridgeLog(`Navigated via app.handleNavigationEndpoint to ${videoId}`);
             navigated = true;
           } catch (e) {
             console.warn('[YTM Page Bridge] app.handleNavigationEndpoint failed:', e);

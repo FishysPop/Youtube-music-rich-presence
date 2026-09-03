@@ -154,6 +154,37 @@ test('sanitizePacket preserves and sanitizes playlistIndex and nextVideoId', () 
     assert.strictEqual(sanitizePacket({ type: 'SYNC_STATE', nextVideoId: 'invalid_id!' }).nextVideoId, undefined);
 });
 
+test('sanitizePacket preserves upcomingTracks capped strictly to maximum 2 items', () => {
+    const packet = {
+        type: 'SYNC_STATE',
+        videoId: 'dQw4w9WgXcQ',
+        upcomingTracks: [
+            { videoId: 'URxCQrotfM8', title: 'An Eater', artist: 'Matt Martians' },
+            { videoId: 'DD9THuwNmZE', title: 'NIGHTMARE', artist: 'WesGhost' },
+            { videoId: 'excessVid99', title: 'Excess Track', artist: 'Excess Artist' }
+        ]
+    };
+    const sanitized = sanitizePacket(packet);
+    assert.notStrictEqual(sanitized, null);
+    assert.strictEqual(Array.isArray(sanitized.upcomingTracks), true);
+    assert.strictEqual(sanitized.upcomingTracks.length, 2);
+    assert.strictEqual(sanitized.upcomingTracks[0].videoId, 'URxCQrotfM8');
+    assert.strictEqual(sanitized.upcomingTracks[1].videoId, 'DD9THuwNmZE');
+
+    // Rejects items with invalid videoId
+    const badPacket = {
+        type: 'SYNC_STATE',
+        videoId: 'dQw4w9WgXcQ',
+        upcomingTracks: [
+            { videoId: 'invalid_id!', title: 'Bad Track' },
+            { videoId: 'kJQP7kiw5Fk', title: 'Good Track' }
+        ]
+    };
+    const sanitizedBad = sanitizePacket(badPacket);
+    assert.strictEqual(sanitizedBad.upcomingTracks.length, 1);
+    assert.strictEqual(sanitizedBad.upcomingTracks[0].videoId, 'kJQP7kiw5Fk');
+});
+
 test('sanitizePacket rejects packets with malicious or invalid fields', () => {
     // Malicious video ID
     assert.strictEqual(sanitizePacket({

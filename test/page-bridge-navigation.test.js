@@ -587,4 +587,125 @@ test('handleBridgeLoadVideo navigates with playlistId and index when unqueued', 
   });
 });
 
+function formatUpcomingTrackItem(track) {
+  if (!track || !track.videoId) return null;
+  return {
+    playlistPanelVideoRenderer: {
+      title: { runs: [{ text: track.title || 'Track' }] },
+      longBylineText: { runs: [{ text: track.artist || '' }] },
+      shortBylineText: { runs: [{ text: track.artist || '' }] },
+      videoId: track.videoId,
+      selected: false,
+      navigationEndpoint: {
+        watchEndpoint: {
+          videoId: track.videoId
+        }
+      }
+    }
+  };
+}
+
+function injectUpcomingTracksIntoWatchNext(json, upcomingTracks) {
+  if (!json || !Array.isArray(upcomingTracks) || upcomingTracks.length === 0) return json;
+  const tabs = json.contents?.singleColumnMusicWatchNextResultsRenderer?.tabbedRenderer?.watchNextTabbedResultsRenderer?.tabs;
+  const playlistPanel = tabs?.[0]?.tabRenderer?.content?.musicQueueRenderer?.content?.playlistPanelRenderer;
+  if (!playlistPanel || !Array.isArray(playlistPanel.contents)) return json;
+
+  const validUpcoming = upcomingTracks.slice(0, 2).map(formatUpcomingTrackItem).filter(Boolean);
+  if (validUpcoming.length === 0) return json;
+
+  const activeIdx = playlistPanel.contents.findIndex(c => c.playlistPanelVideoRenderer?.selected);
+  const insertIdx = activeIdx !== -1 ? activeIdx + 1 : 1;
+
+  const upcomingVideoIds = new Set(validUpcoming.map(u => u.playlistPanelVideoRenderer.videoId));
+  const filteredContents = playlistPanel.contents.filter((c, idx) => {
+    if (idx === activeIdx) return true;
+    const vid = c.playlistPanelVideoRenderer?.videoId;
+    return !upcomingVideoIds.has(vid);
+  });
+
+  filteredContents.splice(insertIdx, 0, ...validUpcoming);
+  playlistPanel.contents = filteredContents;
+  return json;
+}
+
+test('formatUpcomingTrackItem creates valid playlistPanelVideoRenderer structure', () => {
+  const item = formatUpcomingTrackItem({
+    videoId: 'DD9THuwNmZE',
+    title: 'NIGHTMARE',
+    artist: 'WesGhost'
+  });
+  assert.notStrictEqual(item, null);
+  assert.strictEqual(item.playlistPanelVideoRenderer.videoId, 'DD9THuwNmZE');
+  assert.strictEqual(item.playlistPanelVideoRenderer.title.runs[0].text, 'NIGHTMARE');
+  assert.strictEqual(item.playlistPanelVideoRenderer.selected, false);
+});
+
+test('injectUpcomingTracksIntoWatchNext inserts max 2 upcoming tracks right after active track', () => {
+  const mockJson = {
+    contents: {
+      singleColumnMusicWatchNextResultsRenderer: {
+        tabbedRenderer: {
+          watchNextTabbedResultsRenderer: {
+            tabs: [
+              {
+                tabRenderer: {
+                  content: {
+                    musicQueueRenderer: {
+                      content: {
+                        playlistPanelRenderer: {
+                          contents: [
+                            {
+                              playlistPanelVideoRenderer: {
+                                videoId: 'URxCQrotfM8',
+                                title: { runs: [{ text: 'An Eater' }] },
+                                selected: true
+                              }
+                            },
+                            {
+                              playlistPanelVideoRenderer: {
+                                videoId: 'oldQueueVid1',
+                                title: { runs: [{ text: 'Old Next Track' }] },
+                                selected: false
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  };
+
+  const upcomingTracks = [
+    { videoId: 'DD9THuwNmZE', title: 'NIGHTMARE', artist: 'WesGhost' },
+    { videoId: 'nextVid2222', title: 'Second Upcoming', artist: 'Artist 2' },
+    { videoId: 'excessVid33', title: 'Excess Track', artist: 'Artist 3' }
+  ];
+
+  const res = injectUpcomingTracksIntoWatchNext(mockJson, upcomingTracks);
+  const contents = res.contents.singleColumnMusicWatchNextResultsRenderer.tabbedRenderer.watchNextTabbedResultsRenderer.tabs[0].tabRenderer.content.musicQueueRenderer.content.playlistPanelRenderer.contents;
+
+  // Active track remains at 0
+  assert.strictEqual(contents[0].playlistPanelVideoRenderer.videoId, 'URxCQrotfM8');
+  assert.strictEqual(contents[0].playlistPanelVideoRenderer.selected, true);
+
+  // Position 1 is first upcoming track (NIGHTMARE)
+  assert.strictEqual(contents[1].playlistPanelVideoRenderer.videoId, 'DD9THuwNmZE');
+  assert.strictEqual(contents[1].playlistPanelVideoRenderer.title.runs[0].text, 'NIGHTMARE');
+
+  // Position 2 is second upcoming track
+  assert.strictEqual(contents[2].playlistPanelVideoRenderer.videoId, 'nextVid2222');
+
+  // Third excess track is NOT inserted (strictly capped to 2)
+  const hasExcess = contents.some(c => c.playlistPanelVideoRenderer.videoId === 'excessVid33');
+  assert.strictEqual(hasExcess, false);
+});
+
 runAllTests();

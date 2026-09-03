@@ -401,11 +401,20 @@ function getCurrentTrackInfo() {
       playlistIndex = currentIdx;
     }
 
-    if (currentIdx !== -1 && domItems[currentIdx + 1] && domItems[currentIdx + 1].data) {
-      nextVideoId = domItems[currentIdx + 1].data.videoId || null;
+    let upcomingTracks = [];
+    if (currentIdx !== -1 && domItems.length > currentIdx + 1) {
+      nextVideoId = (domItems[currentIdx + 1].data && domItems[currentIdx + 1].data.videoId) || null;
+      upcomingTracks = domItems.slice(currentIdx + 1, currentIdx + 3).map(el => {
+        const d = el.data || {};
+        return {
+          videoId: d.videoId,
+          title: d.title ? (d.title.runs ? d.title.runs[0].text : d.title.simpleText) : '',
+          artist: d.shortBylineText ? (d.shortBylineText.runs ? d.shortBylineText.runs[0].text : d.shortBylineText.simpleText) : ''
+        };
+      }).filter(it => it.videoId && /^[a-zA-Z0-9_-]{11}$/.test(it.videoId));
     }
 
-    return { track, artist, album, albumArtUrl, currentTime, duration, isPlaying, userIsSeeking, videoId, repeatMode, isAd, playlistId, playlistIndex, nextVideoId };
+    return { track, artist, album, albumArtUrl, currentTime, duration, isPlaying, userIsSeeking, videoId, repeatMode, isAd, playlistId, playlistIndex, nextVideoId, upcomingTracks };
   } catch (error) {
     console.error('[YTM RPC Content] Error in getCurrentTrackInfo:', error);
   }
@@ -623,7 +632,12 @@ function formatTime(sec) {
   return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
 
-function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, isPlaying, playlistId, playlistIndex, nextVideoId) {
+window.addEventListener('message', (event) => {
+  if (event.source !== window || !event.data || event.data.source !== 'ytm-page-bridge-log') return;
+  console.log(`[YTM Page Bridge] ${event.data.message}`);
+});
+
+function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, isPlaying, playlistId, playlistIndex, nextVideoId, upcomingTracks) {
   if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     console.warn(`[Listen Together] Cannot navigate: invalid or missing videoId (${videoId})`);
     return;
@@ -650,6 +664,7 @@ function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, 
     playlistId: playlistId || undefined,
     playlistIndex: typeof playlistIndex === 'number' ? playlistIndex : undefined,
     nextVideoId: nextVideoId || undefined,
+    upcomingTracks: Array.isArray(upcomingTracks) ? upcomingTracks : undefined,
     track: trackTitle,
     artist: artist,
     albumArtUrl: albumArtUrl,
@@ -685,6 +700,14 @@ function handleRemoteSyncAction(packet) {
 
   if (packet.isAd || isAdTrack(packet)) {
     return;
+  }
+
+  if (Array.isArray(packet.upcomingTracks) && packet.upcomingTracks.length > 0) {
+    window.postMessage({
+      source: 'ytm-sync-isolated',
+      action: 'SYNC_UPCOMING_TRACKS',
+      upcomingTracks: packet.upcomingTracks
+    }, '*');
   }
 
   const currentVid = getCurrentVideoId();
@@ -756,12 +779,20 @@ function handleRemoteTrackChange(packet) {
     return;
   }
 
+  if (Array.isArray(packet.upcomingTracks) && packet.upcomingTracks.length > 0) {
+    window.postMessage({
+      source: 'ytm-sync-isolated',
+      action: 'SYNC_UPCOMING_TRACKS',
+      upcomingTracks: packet.upcomingTracks
+    }, '*');
+  }
+
   const currentVid = getCurrentVideoId();
   console.log(`[Listen Together Listener] handleRemoteTrackChange: packet.videoId=${packet.videoId}, currentVid=${currentVid}, lastSyncedVideoId=${lastSyncedVideoId}`);
 
   if (packet.videoId && (packet.videoId !== lastSyncedVideoId || (currentVid && packet.videoId !== currentVid))) {
     console.log(`[Listen Together Listener] Triggering navigation for: "${packet.track}" (ID: ${packet.videoId})`);
-    navigateToVideo(packet.videoId, packet.track, packet.artist, packet.albumArtUrl, packet.currentTime, packet.isPlaying, packet.playlistId, packet.playlistIndex, packet.nextVideoId);
+    navigateToVideo(packet.videoId, packet.track, packet.artist, packet.albumArtUrl, packet.currentTime, packet.isPlaying, packet.playlistId, packet.playlistIndex, packet.nextVideoId, packet.upcomingTracks);
   }
 }
 
