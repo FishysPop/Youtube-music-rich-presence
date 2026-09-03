@@ -159,6 +159,12 @@ function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, pl
   const items = Array.isArray(queueItems) ? queueItems : [];
   const curIdx = typeof currentQueueIdx === 'number' ? currentQueueIdx : -1;
 
+  if (!currentVid || curIdx === -1) {
+    const watchEndpoint = buildWatchEndpoint(videoId, currentTime, playlistId, playlistIndex).watchEndpoint;
+    const navMethod = executeTieredNavigation(app, watchEndpoint, windowObj);
+    return { actionTaken: 'navigated_empty_state', navMethod, watchEndpoint };
+  }
+
   const nextItem = curIdx !== -1 && curIdx + 1 < items.length ? items[curIdx + 1] : null;
   if (nextItem && nextItem.videoId === videoId) {
     if (nextBtn && typeof nextBtn.click === 'function') {
@@ -422,6 +428,8 @@ test('handleBridgeLoadVideo triggers SPA navigation when a new videoId is receiv
     currentTime: 5,
     isPlaying: true,
     playlistId: 'RDmix123',
+    queueItems: [{ videoId: 'oldVideo1111' }],
+    currentQueueIdx: 0,
     app
   });
 
@@ -592,6 +600,28 @@ test('handleBridgeLoadVideo navigates with playlistId and index when unqueued', 
       videoId: 'vidUnqueued',
       playlistId: 'PLmix999',
       index: 5
+    }
+  });
+});
+
+test('handleBridgeLoadVideo navigates directly when player is stopped or queue is empty', () => {
+  let navPayload = null;
+  const app = {
+    handleNavigationEndpoint: (p) => { navPayload = p; }
+  };
+
+  const res = handleBridgeLoadVideo({
+    currentVid: null,
+    videoId: 'vidFreshStart',
+    queueItems: [],
+    currentQueueIdx: -1,
+    app
+  });
+
+  assert.strictEqual(res.actionTaken, 'navigated_empty_state');
+  assert.deepStrictEqual(navPayload, {
+    watchEndpoint: {
+      videoId: 'vidFreshStart'
     }
   });
 });
