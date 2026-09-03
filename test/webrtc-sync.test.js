@@ -282,17 +282,19 @@ test('determineSyncAction: Hard seek when drift > HARD_SEEK_THRESHOLD_MS (e.g. 3
     assert.strictEqual(action.targetTime, 33.0);
 });
 
-test('determineSyncAction: uses gradual speed-up instead of hard seek when preferSpeedAdjustment is true', () => {
-    // Follower is 3000ms behind, but preferSpeedAdjustment is true (e.g. song recently skipped/loaded)
+test('determineSyncAction: uses gradual speed-up instead of hard seek when preferSpeedAdjustment is true for drift <= 5000ms', () => {
     const action = determineSyncAction(3000, true, true, 4.0, false, true);
     assert.strictEqual(action.action, 'SOFT_SPEED_UP');
     assert.strictEqual(action.playbackRate, 1.12);
     assert.strictEqual(action.targetTime, undefined);
 
-    // Follower is 6000ms behind with preferSpeedAdjustment
-    const actionLarge = determineSyncAction(6000, true, true, 2.0, false, true);
+    const actionLarge = determineSyncAction(4500, true, true, 2.0, false, true);
     assert.strictEqual(actionLarge.action, 'SOFT_SPEED_UP');
     assert.strictEqual(actionLarge.playbackRate, 1.20);
+
+    const actionOver = determineSyncAction(6000, true, true, 2.0, false, true);
+    assert.strictEqual(actionOver.action, 'HARD_SEEK');
+    assert.strictEqual(actionOver.targetTime, 8.0);
 });
 
 test('determineSyncAction: Synchronizes play/pause state regardless of drift', () => {

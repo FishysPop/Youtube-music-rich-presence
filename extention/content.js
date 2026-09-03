@@ -729,7 +729,7 @@ function handleRemoteSyncAction(packet) {
   lastAppliedDriftMs = driftMs;
 
   const isRecentTrackChange = (Date.now() - lastTrackChangeTime < 30000);
-  const preferSpeedAdjustment = isRecentTrackChange || (packet.type !== 'SEEK' && driftMs > 0 && driftMs <= 15000);
+  const preferSpeedAdjustment = isRecentTrackChange || (packet.type !== 'SEEK' && driftMs > 0 && driftMs <= 5000);
 
   const action = window.ytmDetermineSyncAction
     ? window.ytmDetermineSyncAction(driftMs, !video.paused, packet.isPlaying, video.currentTime, currentIsAd, preferSpeedAdjustment)

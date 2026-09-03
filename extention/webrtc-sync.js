@@ -216,9 +216,9 @@ function determineSyncAction(driftMs, localIsPlaying, remoteIsPlaying, localCurr
         };
     }
 
-    if (preferSpeedAdjustment && driftMs > 0 && driftMs <= 15000) {
+    if (preferSpeedAdjustment && driftMs > 0 && driftMs <= 5000) {
         let playbackRate = 1.05;
-        if (driftMs > 4000) playbackRate = 1.20;
+        if (driftMs > 3000) playbackRate = 1.20;
         else if (driftMs > 1200) playbackRate = 1.12;
 
         return {
