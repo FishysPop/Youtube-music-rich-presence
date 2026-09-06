@@ -15,6 +15,7 @@
 
   function formatUpcomingTrackItem(track) {
     if (!track || !track.videoId) return null;
+    const thumbUrl = track.albumArtUrl || track.thumbnail || `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
     return {
       playlistPanelVideoRenderer: {
         title: { runs: [{ text: track.title || 'Track' }] },
@@ -22,9 +23,58 @@
         shortBylineText: { runs: [{ text: track.artist || '' }] },
         videoId: track.videoId,
         selected: false,
+        canReorder: true,
+        thumbnail: {
+          thumbnails: [
+            {
+              url: thumbUrl,
+              width: 400,
+              height: 225
+            },
+            {
+              url: `https://i.ytimg.com/vi/${track.videoId}/default.jpg`,
+              width: 120,
+              height: 90
+            }
+          ]
+        },
         navigationEndpoint: {
+          clickTrackingParams: "CAIQyCAYACITCLDXgoim2JYDFTIYYwEdI5YtHg==",
           watchEndpoint: {
-            videoId: track.videoId
+            videoId: track.videoId,
+            watchEndpointMusicSupportedConfigs: {
+              watchEndpointMusicConfig: {
+                hasPersistentPlaylistPanel: true,
+                musicVideoType: "MUSIC_VIDEO_TYPE_OMV"
+              }
+            }
+          }
+        },
+        queueNavigationEndpoint: {
+          queueAddEndpoint: {
+            queueTarget: {
+              videoId: track.videoId
+            },
+            queueInsertPosition: "INSERT_AT_END"
+          }
+        },
+        menu: {
+          menuRenderer: {
+            items: [
+              {
+                menuNavigationItemRenderer: {
+                  text: { runs: [{ text: "Start mix" }] },
+                  icon: { iconType: "MIX" },
+                  navigationEndpoint: {
+                    watchEndpoint: {
+                      videoId: track.videoId,
+                      playlistId: "RDAMVM" + track.videoId
+                    }
+                  }
+                }
+              }
+            ],
+            trackingParams: "CAIQyCAYACITCLDXgoim2JYDFTIYYwEdI5YtHg=="
           }
         }
       }
@@ -55,50 +105,178 @@
     return json;
   }
 
-  function injectUpcomingTracksIntoRedux(tracksToInject) {
-    if (!Array.isArray(tracksToInject) || tracksToInject.length === 0) return false;
-    const store = document.querySelector('ytmusic-player-bar')?.queue?.store?.store ||
-                  document.querySelector('ytmusic-app')?.queue?.store?.store;
+  function getQueueContext() {
+    const app = document.querySelector('ytmusic-app');
+    const playerBar = document.querySelector('ytmusic-player-bar');
+    const player = document.getElementById('movie_player') ||
+                   document.querySelector('ytmusic-player') ||
+                   document.querySelector('#player');
+
+    const queueObj = playerBar?.queue || app?.queue || null;
+    const store = queueObj?.store?.store || playerBar?.queue?.store?.store || app?.queue?.store?.store;
+
+    let items = [];
+    if (queueObj && typeof queueObj.getItems === 'function') {
+      try { items = queueObj.getItems() || []; } catch (e) {}
+    }
+    if ((!items || items.length === 0) && app && typeof app.getState === 'function') {
+      try { items = app.getState()?.queue?.items || []; } catch (e) {}
+    }
+
+    let currentQueueIdx = -1;
+    if (queueObj && typeof queueObj.getCurrentItemIndex === 'function') {
+      try { currentQueueIdx = queueObj.getCurrentItemIndex(); } catch (e) {}
+    }
+    if ((typeof currentQueueIdx !== 'number' || currentQueueIdx === -1) && app && typeof app.getState === 'function') {
+      try {
+        const qState = app.getState()?.queue;
+        if (qState && typeof qState.selectedItemIndex === 'number') {
+          currentQueueIdx = qState.selectedItemIndex;
+        }
+      } catch (e) {}
+    }
+
+    const currentVid = (player && typeof player.getVideoData === 'function')
+      ? (player.getVideoData() || {}).video_id
+      : null;
+
+    if ((typeof currentQueueIdx !== 'number' || currentQueueIdx === -1) && currentVid && items.length > 0) {
+      currentQueueIdx = items.findIndex(it => it?.playlistPanelVideoRenderer?.videoId === currentVid);
+    }
+
+    return { app, playerBar, player, queueObj, store, items, currentQueueIdx, currentVid };
+  }
+
+  function getUpcomingTracksFromQueue() {
+    const { items, currentQueueIdx } = getQueueContext();
+    if (!items || items.length === 0 || currentQueueIdx === -1) return [];
+    return items.slice(currentQueueIdx + 1, currentQueueIdx + 16).map(it => {
+      const r = it?.playlistPanelVideoRenderer;
+      if (!r || !r.videoId) return null;
+      return {
+        videoId: r.videoId,
+        title: r.title?.runs?.[0]?.text || r.title?.simpleText || '',
+        artist: r.shortBylineText?.runs?.[0]?.text || r.shortBylineText?.simpleText || ''
+      };
+    }).filter(Boolean);
+  }
+
+  function syncQueueProperly(targetUpcomingTracks) {
+    if (!Array.isArray(targetUpcomingTracks) || targetUpcomingTracks.length === 0) return false;
+    const { store, queueObj, items, currentQueueIdx } = getQueueContext();
     if (!store || typeof store.dispatch !== 'function') return false;
 
-    const domItems = Array.from(document.querySelectorAll('ytmusic-player-queue-item'));
-    let currentQueueIdx = domItems.findIndex(el => el.selected);
-    if (currentQueueIdx === -1) {
-      const p = document.getElementById('movie_player');
-      const curVid = p && typeof p.getVideoData === 'function' ? p.getVideoData()?.video_id : null;
-      if (curVid) {
-        currentQueueIdx = domItems.findIndex(el => el.data && el.data.videoId === curVid);
+    const validTracks = targetUpcomingTracks.slice(0, 15).filter(t => t && t.videoId);
+    if (validTracks.length === 0) return false;
+
+    const targetStartIdx = (typeof currentQueueIdx === 'number' && currentQueueIdx >= 0)
+      ? currentQueueIdx + 1
+      : 0;
+
+    for (let i = 0; i < validTracks.length; i++) {
+      const desiredTrack = validTracks[i];
+      const desiredPos = targetStartIdx + i;
+      const freshItems = (queueObj && typeof queueObj.getItems === 'function')
+        ? (queueObj.getItems() || [])
+        : (items || []);
+
+      const existingIdx = freshItems.findIndex((it, idx) => idx >= targetStartIdx && it?.playlistPanelVideoRenderer?.videoId === desiredTrack.videoId);
+
+      if (existingIdx === desiredPos) {
+        continue;
+      } else if (existingIdx > desiredPos) {
+        try {
+          store.dispatch({
+            type: 'MOVE_ITEM',
+            payload: {
+              fromIndex: existingIdx,
+              toIndex: desiredPos
+            }
+          });
+        } catch (e) {}
+      } else {
+        const formatted = formatUpcomingTrackItem(desiredTrack);
+        if (formatted) {
+          try {
+            store.dispatch({
+              type: 'ADD_ITEMS',
+              payload: {
+                index: desiredPos,
+                items: [formatted],
+                nextQueueItemId: Math.floor(Math.random() * 1000000),
+                shouldAssignIds: true
+              }
+            });
+          } catch (e) {}
+        }
       }
     }
 
-    if (currentQueueIdx === -1) return false;
-
-    const targetIdx = currentQueueIdx + 1;
-    const nextItem = domItems[currentQueueIdx + 1];
-    const nextVid = nextItem && nextItem.data ? nextItem.data.videoId : null;
-
-    if (nextVid === tracksToInject[0]?.videoId) {
-      return true;
+    const freshItemsAfter = (queueObj && typeof queueObj.getItems === 'function')
+      ? (queueObj.getItems() || [])
+      : [];
+    const maxAllowedIdx = targetStartIdx + validTracks.length;
+    for (let i = freshItemsAfter.length - 1; i >= maxAllowedIdx; i--) {
+      const it = freshItemsAfter[i];
+      if (queueObj && typeof queueObj.removeItem === 'function' && it) {
+        try {
+          queueObj.removeItem(it);
+          continue;
+        } catch (e) {}
+      }
+      try {
+        store.dispatch({ type: 'REMOVE_ITEM', payload: i });
+      } catch (e) {}
     }
 
-    const formattedItems = tracksToInject.slice(0, 2).map(formatUpcomingTrackItem).filter(Boolean);
-    if (formattedItems.length === 0) return false;
+    return true;
+  }
 
-    try {
-      store.dispatch({
-        type: 'ADD_ITEMS',
-        payload: {
-          index: targetIdx,
-          items: formattedItems,
-          nextQueueItemId: Math.floor(Math.random() * 100000),
-          shouldAssignIds: true
-        }
-      });
-      bridgeLog(`Injected ${formattedItems.length} upcoming track(s) into Redux queue at index ${targetIdx}`);
-      return true;
-    } catch (e) {
-      bridgeLog(`Failed to dispatch ADD_ITEMS to Redux queue: ${e.message}`);
-      return false;
+  function executeNavigation(targetVid, targetTime, pId, pIdx) {
+    const { app } = getQueueContext();
+    const startSec = Math.floor(targetTime || 0);
+    const watchEndpoint = { videoId: targetVid };
+    if (startSec > 0) watchEndpoint.startTimeSeconds = startSec;
+    if (pId && typeof pId === 'string') watchEndpoint.playlistId = pId;
+    if (typeof pIdx === 'number' && Number.isInteger(pIdx) && pIdx >= 0) watchEndpoint.index = pIdx;
+
+    let navigated = false;
+    if (app && typeof app.handleNavigationEndpoint === 'function') {
+      try {
+        app.handleNavigationEndpoint({ watchEndpoint });
+        bridgeLog(`Navigated via app.handleNavigationEndpoint to ${targetVid}`);
+        navigated = true;
+      } catch (e) {
+        console.warn('[YTM Page Bridge] app.handleNavigationEndpoint failed:', e);
+      }
+    }
+
+    if (!navigated && app && typeof app.dispatchEvent === 'function') {
+      try {
+        const navEvent = new CustomEvent('yt-navigate', {
+          bubbles: true,
+          composed: true,
+          detail: { endpoint: { watchEndpoint } }
+        });
+        app.dispatchEvent(navEvent);
+        navigated = true;
+      } catch (e) {}
+    }
+
+    if (!navigated && app && app.navigator && typeof app.navigator.navigate === 'function') {
+      try {
+        app.navigator.navigate({ watchEndpoint });
+        navigated = true;
+      } catch (e) {}
+    }
+
+    if (!navigated) {
+      const searchParams = new URLSearchParams();
+      searchParams.set('v', targetVid);
+      if (startSec > 0) searchParams.set('t', startSec);
+      if (watchEndpoint.playlistId) searchParams.set('list', watchEndpoint.playlistId);
+      if (typeof watchEndpoint.index === 'number') searchParams.set('index', watchEndpoint.index);
+      window.location.assign(`/watch?${searchParams.toString()}`);
     }
   }
 
@@ -108,9 +286,9 @@
     const { action, videoId, currentTime, rate, isPlaying, track, artist, albumArtUrl, upcomingTracks } = event.data;
 
     if (action === 'SYNC_UPCOMING_TRACKS' && Array.isArray(upcomingTracks)) {
-      window.__syncedUpcomingTracks = upcomingTracks.slice(0, 2);
+      window.__syncedUpcomingTracks = upcomingTracks.slice(0, 15);
       bridgeLog(`Synced upcoming tracks updated (count=${window.__syncedUpcomingTracks.length}): ${window.__syncedUpcomingTracks.map(t => t.videoId).join(', ')}`);
-      injectUpcomingTracksIntoRedux(window.__syncedUpcomingTracks);
+      syncQueueProperly(window.__syncedUpcomingTracks);
       return;
     }
 
@@ -120,16 +298,16 @@
                    document.querySelector('#player');
 
     if (action === 'LOAD_VIDEO' && videoId) {
-      if (Array.isArray(upcomingTracks) && upcomingTracks.length > 0) {
-        window.__syncedUpcomingTracks = upcomingTracks.slice(0, 2);
+      if (checkIsAd()) {
+        bridgeLog(`Ad is currently playing. Deferring LOAD_VIDEO for ${videoId}`);
+        return;
       }
 
-      const app = document.querySelector('ytmusic-app');
-      const playerBar = document.querySelector('ytmusic-player-bar');
+      if (Array.isArray(upcomingTracks) && upcomingTracks.length > 0) {
+        window.__syncedUpcomingTracks = upcomingTracks.slice(0, 15);
+      }
 
-      const currentVid = (player && typeof player.getVideoData === 'function')
-        ? (player.getVideoData() || {}).video_id
-        : null;
+      const { app, playerBar, queueObj, store, items, currentQueueIdx, currentVid } = getQueueContext();
 
       bridgeLog(`LOAD_VIDEO target=${videoId}, currently playing=${currentVid}`);
 
@@ -146,149 +324,110 @@
         return;
       }
 
-      function executeNavigation(targetVid, targetTime, pId, pIdx) {
-        const startSec = Math.floor(targetTime || 0);
-        const watchEndpoint = { videoId: targetVid };
-        if (startSec > 0) watchEndpoint.startTimeSeconds = startSec;
-        if (pId && typeof pId === 'string') watchEndpoint.playlistId = pId;
-        if (typeof pIdx === 'number' && Number.isInteger(pIdx) && pIdx >= 0) watchEndpoint.index = pIdx;
+      if (Array.isArray(window.__syncedUpcomingTracks) && window.__syncedUpcomingTracks.length > 0) {
+        syncQueueProperly(window.__syncedUpcomingTracks);
+      }
 
-        let navigated = false;
-        if (app && typeof app.handleNavigationEndpoint === 'function') {
+      const freshContext = getQueueContext();
+      const freshItems = freshContext.items || [];
+      const matchingIdx = freshItems.findIndex(it => it?.playlistPanelVideoRenderer?.videoId === videoId);
+
+      if (matchingIdx !== -1) {
+        const matchingItem = freshItems[matchingIdx];
+        const curIdx = (typeof freshContext.currentQueueIdx === 'number' && freshContext.currentQueueIdx >= 0)
+          ? freshContext.currentQueueIdx
+          : 0;
+
+        if (matchingIdx > curIdx + 1 && store && typeof store.dispatch === 'function') {
           try {
-            app.handleNavigationEndpoint({ watchEndpoint });
-            bridgeLog(`Navigated via app.handleNavigationEndpoint to ${targetVid}`);
-            navigated = true;
+            store.dispatch({
+              type: 'MOVE_ITEM',
+              payload: {
+                fromIndex: matchingIdx,
+                toIndex: curIdx + 1
+              }
+            });
+          } catch (e) {}
+        }
+
+        const navEndpoint = matchingItem?.playlistPanelVideoRenderer?.navigationEndpoint;
+        if (navEndpoint && app && typeof app.handleNavigationEndpoint === 'function') {
+          try {
+            bridgeLog(`Triggering native navigationEndpoint for ${videoId}`);
+            app.handleNavigationEndpoint(navEndpoint);
+            return;
           } catch (e) {
-            console.warn('[YTM Page Bridge] app.handleNavigationEndpoint failed:', e);
+            bridgeLog(`app.handleNavigationEndpoint error: ${e.message}`);
           }
         }
 
-        if (!navigated && app && typeof app.dispatchEvent === 'function') {
+        if (queueObj && typeof queueObj.selectQueueItem === 'function') {
           try {
-            const navEvent = new CustomEvent('yt-navigate', {
-              bubbles: true,
-              composed: true,
-              detail: { endpoint: { watchEndpoint } }
+            bridgeLog(`Selecting via queueObj.selectQueueItem for ${videoId}`);
+            queueObj.selectQueueItem(matchingItem);
+            return;
+          } catch (e) {
+            bridgeLog(`queueObj.selectQueueItem error: ${e.message}`);
+          }
+        }
+      }
+
+      if (store && typeof store.dispatch === 'function') {
+        const trackToInject = {
+          videoId,
+          title: track || 'Track',
+          artist: artist || '',
+          albumArtUrl
+        };
+        const formatted = formatUpcomingTrackItem(trackToInject);
+        const insertIdx = (typeof freshContext.currentQueueIdx === 'number' && freshContext.currentQueueIdx >= 0)
+          ? freshContext.currentQueueIdx + 1
+          : 0;
+
+        if (formatted) {
+          try {
+            store.dispatch({
+              type: 'ADD_ITEMS',
+              payload: {
+                index: insertIdx,
+                items: [formatted],
+                nextQueueItemId: Math.floor(Math.random() * 1000000),
+                shouldAssignIds: true
+              }
             });
-            app.dispatchEvent(navEvent);
-            navigated = true;
-          } catch (e) {}
-        }
+            bridgeLog(`Added ${videoId} to queue at ${insertIdx}; navigating via native endpoint`);
 
-        if (!navigated && app && app.navigator && typeof app.navigator.navigate === 'function') {
-          try {
-            app.navigator.navigate({ watchEndpoint });
-            navigated = true;
-          } catch (e) {}
-        }
+            const navEndpoint = formatted.playlistPanelVideoRenderer?.navigationEndpoint;
+            if (navEndpoint && app && typeof app.handleNavigationEndpoint === 'function') {
+              app.handleNavigationEndpoint(navEndpoint);
+              return;
+            }
 
-        if (!navigated) {
-          const searchParams = new URLSearchParams();
-          searchParams.set('v', targetVid);
-          if (startSec > 0) searchParams.set('t', startSec);
-          if (watchEndpoint.playlistId) searchParams.set('list', watchEndpoint.playlistId);
-          if (typeof watchEndpoint.index === 'number') searchParams.set('index', watchEndpoint.index);
-          window.location.assign(`/watch?${searchParams.toString()}`);
+            if (queueObj && typeof queueObj.selectQueueItem === 'function') {
+              queueObj.selectQueueItem(formatted);
+              return;
+            }
+          } catch (e) {
+            bridgeLog(`Queue add error: ${e.message}`);
+          }
         }
       }
 
       const domQueueItems = Array.from(document.querySelectorAll('ytmusic-player-queue-item'));
-      let currentQueueIdx = domQueueItems.findIndex(el => el.selected);
-      if (currentQueueIdx === -1 && currentVid) {
-        currentQueueIdx = domQueueItems.findIndex(el => el.data && el.data.videoId === currentVid);
-      }
-
-      if (!currentVid || currentQueueIdx === -1 || domQueueItems.length === 0) {
-        bridgeLog(`No active playback (currentVid=${currentVid}, currentQueueIdx=${currentQueueIdx}); starting playback via SPA navigation for ${videoId}`);
-        executeNavigation(videoId, currentTime, event.data.playlistId, event.data.playlistIndex);
-        return;
-      }
-
-      const nextQueueItem = (currentQueueIdx !== -1 && currentQueueIdx + 1 < domQueueItems.length)
-        ? domQueueItems[currentQueueIdx + 1]
-        : null;
-      const nextQueueVid = (nextQueueItem && nextQueueItem.data) ? nextQueueItem.data.videoId : null;
-
-      bridgeLog(`Checking queue skip options: currentQueueIdx=${currentQueueIdx}, nextQueueVid=${nextQueueVid}, target=${videoId}`);
-
-      if (nextQueueVid === videoId) {
-        const nextBtn = playerBar ? (playerBar.querySelector('.next-button') || playerBar.querySelector('#next-button')) : document.querySelector('ytmusic-player-bar .next-button');
-        if (nextBtn && typeof nextBtn.click === 'function') {
-          bridgeLog(`Target is already next in queue: triggering native next button for ${videoId}`);
-          nextBtn.click();
-          return;
-        }
-      }
-
-      const prevQueueItem = (currentQueueIdx > 0 && currentQueueIdx - 1 < domQueueItems.length)
-        ? domQueueItems[currentQueueIdx - 1]
-        : null;
-      const prevQueueVid = (prevQueueItem && prevQueueItem.data) ? prevQueueItem.data.videoId : null;
-
-      if (prevQueueVid === videoId) {
-        const prevBtn = playerBar ? (playerBar.querySelector('.previous-button') || playerBar.querySelector('#previous-button')) : document.querySelector('ytmusic-player-bar .previous-button');
-        if (prevBtn && typeof prevBtn.click === 'function') {
-          bridgeLog(`Target is previous in queue: triggering native previous button for ${videoId}`);
-          prevBtn.click();
-          return;
-        }
-      }
-
       if (domQueueItems.length > 0) {
-        const matchingItem = domQueueItems.find(el => el.data && el.data.videoId === videoId);
-        if (matchingItem) {
-          const playBtn = matchingItem.querySelector('#play-button, .play-button') || matchingItem;
+        const matchingDomItem = domQueueItems.find(el => el.data && el.data.videoId === videoId);
+        if (matchingDomItem) {
+          const playBtn = matchingDomItem.querySelector('#play-button, .play-button') || matchingDomItem;
           if (typeof playBtn.click === 'function') {
-            bridgeLog(`Target found in queue: clicking queue play button for ${videoId}`);
+            bridgeLog(`Target found in DOM queue: clicking queue play button for ${videoId}`);
             playBtn.click();
             return;
           }
         }
       }
 
-      const trackToInject = {
-        videoId,
-        title: track || 'Track',
-        artist: artist || ''
-      };
-      const injected = injectUpcomingTracksIntoRedux([trackToInject]);
-      if (injected) {
-        const nextBtn = playerBar ? (playerBar.querySelector('.next-button') || playerBar.querySelector('#next-button')) : document.querySelector('ytmusic-player-bar .next-button');
-        if (nextBtn && typeof nextBtn.click === 'function') {
-          bridgeLog(`Injected ${videoId} into Redux queue at next position; triggering native next button`);
-          nextBtn.click();
-          return;
-        }
-      }
-
-      bridgeLog(`Could not skip via native queue; falling back to SPA navigation for ${videoId}`);
+      bridgeLog(`Falling back to tiered SPA navigation for ${videoId}`);
       executeNavigation(videoId, currentTime, event.data.playlistId, event.data.playlistIndex);
-      return;
-
-      if (typeof currentTime === 'number' && currentTime > 3) {
-        setTimeout(() => {
-          const livePlayer = document.getElementById('movie_player') ||
-                             document.querySelector('ytmusic-player') ||
-                             document.querySelector('#player');
-          if (livePlayer && typeof livePlayer.seekTo === 'function') {
-            livePlayer.seekTo(currentTime, true);
-          }
-        }, 400);
-      }
-
-      if (isPlaying === false) {
-        const pauseOnReady = () => {
-          const livePlayer = document.getElementById('movie_player') ||
-                             document.querySelector('ytmusic-player') ||
-                             document.querySelector('#player');
-          if (livePlayer && typeof livePlayer.pauseVideo === 'function') {
-            livePlayer.pauseVideo();
-          }
-        };
-        setTimeout(pauseOnReady, 350);
-        setTimeout(pauseOnReady, 900);
-      }
     } else if (action === 'SEEK' && typeof currentTime === 'number') {
       try {
         const isAd = checkIsAd();
@@ -316,26 +455,39 @@
           player.setPlaybackRate(rate);
         }
       } catch (e) {}
+    } else if (action === 'REQUEST_QUEUE') {
+      try {
+        const upcoming = getUpcomingTracksFromQueue();
+        window.postMessage({
+          source: 'ytm-page-bridge-queue',
+          upcomingTracks: upcoming
+        }, '*');
+      } catch (e) {}
     }
   });
+
+  window.__getYtmUpcomingTracks = getUpcomingTracksFromQueue;
 
   function checkIsAd() {
     const player = document.getElementById('movie_player') ||
                    document.querySelector('ytmusic-player') ||
                    document.querySelector('#player');
     if (player) {
-      if (typeof player.getAdState === 'function' && player.getAdState() >= 0) return true;
+      if (typeof player.getAdState === 'function') {
+        const adState = player.getAdState();
+        if (adState >= 0) return true;
+        if (adState === -1) return false;
+      }
       if (typeof player.isLifaAdPlaying === 'function' && player.isLifaAdPlaying()) return true;
-      if (typeof player.isAd === 'function' && player.isAd()) return true;
-      if (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')) return true;
     }
     const starkBadge = document.querySelector('ytmusic-player-bar .badge-style-type-ad-stark');
     if (starkBadge && !starkBadge.hidden && starkBadge.offsetParent !== null) return true;
-    if (document.querySelector('.ad-showing, .ytp-ad-showing, .ytp-ad-player-overlay, .video-ads.ytp-ad-module .ytp-ad-text')) return true;
+    if (document.querySelector('.ytp-ad-player-overlay, .video-ads.ytp-ad-module .ytp-ad-text')) return true;
     return false;
   }
 
   let isAdActive = false;
+  let lastBroadcastQueueJson = '';
   function updatePlayerBridgeData() {
     const player = document.getElementById('movie_player') ||
                    document.querySelector('ytmusic-player') ||
@@ -351,6 +503,18 @@
         }
       } catch (e) {}
     }
+
+    try {
+      const upcoming = getUpcomingTracksFromQueue();
+      const upcomingJson = JSON.stringify(upcoming.map(t => t.videoId));
+      if (upcomingJson !== lastBroadcastQueueJson) {
+        lastBroadcastQueueJson = upcomingJson;
+        window.postMessage({
+          source: 'ytm-page-bridge-queue',
+          upcomingTracks: upcoming
+        }, '*');
+      }
+    } catch (e) {}
   }
 
   function pollAdState() {

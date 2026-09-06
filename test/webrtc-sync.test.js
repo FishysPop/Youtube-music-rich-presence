@@ -154,22 +154,24 @@ test('sanitizePacket preserves and sanitizes playlistIndex and nextVideoId', () 
     assert.strictEqual(sanitizePacket({ type: 'SYNC_STATE', nextVideoId: 'invalid_id!' }).nextVideoId, undefined);
 });
 
-test('sanitizePacket preserves upcomingTracks capped strictly to maximum 2 items', () => {
+test('sanitizePacket preserves upcomingTracks capped strictly to maximum 15 items', () => {
+    const generateTracks = (n) => Array.from({ length: n }, (_, i) => ({
+        videoId: `trackId${String(i).padStart(4, '0')}`,
+        title: `Track ${i}`,
+        artist: `Artist ${i}`
+    }));
+
     const packet = {
         type: 'SYNC_STATE',
         videoId: 'dQw4w9WgXcQ',
-        upcomingTracks: [
-            { videoId: 'URxCQrotfM8', title: 'An Eater', artist: 'Matt Martians' },
-            { videoId: 'DD9THuwNmZE', title: 'NIGHTMARE', artist: 'WesGhost' },
-            { videoId: 'excessVid99', title: 'Excess Track', artist: 'Excess Artist' }
-        ]
+        upcomingTracks: generateTracks(20)
     };
     const sanitized = sanitizePacket(packet);
     assert.notStrictEqual(sanitized, null);
     assert.strictEqual(Array.isArray(sanitized.upcomingTracks), true);
-    assert.strictEqual(sanitized.upcomingTracks.length, 2);
-    assert.strictEqual(sanitized.upcomingTracks[0].videoId, 'URxCQrotfM8');
-    assert.strictEqual(sanitized.upcomingTracks[1].videoId, 'DD9THuwNmZE');
+    assert.strictEqual(sanitized.upcomingTracks.length, 15);
+    assert.strictEqual(sanitized.upcomingTracks[0].videoId, 'trackId0000');
+    assert.strictEqual(sanitized.upcomingTracks[14].videoId, 'trackId0014');
 
     // Rejects items with invalid videoId
     const badPacket = {
@@ -183,6 +185,23 @@ test('sanitizePacket preserves upcomingTracks capped strictly to maximum 2 items
     const sanitizedBad = sanitizePacket(badPacket);
     assert.strictEqual(sanitizedBad.upcomingTracks.length, 1);
     assert.strictEqual(sanitizedBad.upcomingTracks[0].videoId, 'kJQP7kiw5Fk');
+});
+
+test('sanitizePacket permits QUEUE_SYNC packet type and preserves up to 15 queue items', () => {
+    const queuePacket = {
+        type: 'QUEUE_SYNC',
+        currentVideoId: 'dQw4w9WgXcQ',
+        upcomingTracks: [
+            { videoId: 'kJQP7kiw5Fk', title: 'Despacito', artist: 'Luis Fonsi' },
+            { videoId: 'DiItGE3eAyQ', title: 'Con Calma', artist: 'Daddy Yankee' }
+        ]
+    };
+    const sanitized = sanitizePacket(queuePacket);
+    assert.notStrictEqual(sanitized, null);
+    assert.strictEqual(sanitized.type, 'QUEUE_SYNC');
+    assert.strictEqual(sanitized.currentVideoId, 'dQw4w9WgXcQ');
+    assert.strictEqual(sanitized.upcomingTracks.length, 2);
+    assert.strictEqual(sanitized.upcomingTracks[0].videoId, 'kJQP7kiw5Fk');
 });
 
 test('sanitizePacket rejects packets with malicious or invalid fields', () => {

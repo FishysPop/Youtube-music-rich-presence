@@ -181,6 +181,15 @@ function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, pl
     }
   }
 
+  if (arguments[0]?.queueObj && typeof arguments[0].queueObj.getItems === 'function' && typeof arguments[0].queueObj.selectQueueItem === 'function') {
+    const qItems = arguments[0].queueObj.getItems();
+    const matching = qItems.find(it => it?.playlistPanelVideoRenderer?.videoId === videoId);
+    if (matching) {
+      arguments[0].queueObj.selectQueueItem(matching);
+      return { actionTaken: 'queue_select_item' };
+    }
+  }
+
   if (items.length > 0) {
     const matchingItem = items.find(it => it.videoId === videoId);
     if (matchingItem && matchingItem.playBtn && typeof matchingItem.playBtn.click === 'function') {
@@ -749,7 +758,7 @@ test('injectUpcomingTracksIntoWatchNext inserts max 2 upcoming tracks right afte
 
 function buildReduxAddItemsAction(currentQueueIdx, upcomingTracks) {
   if (!Array.isArray(upcomingTracks) || upcomingTracks.length === 0) return null;
-  const items = upcomingTracks.slice(0, 2).map(formatUpcomingTrackItem).filter(Boolean);
+  const items = upcomingTracks.slice(0, 15).map(formatUpcomingTrackItem).filter(Boolean);
   if (items.length === 0) return null;
 
   const targetIndex = (typeof currentQueueIdx === 'number' && currentQueueIdx >= 0)
@@ -767,20 +776,20 @@ function buildReduxAddItemsAction(currentQueueIdx, upcomingTracks) {
   };
 }
 
-test('buildReduxAddItemsAction builds ADD_ITEMS action at currentQueueIdx + 1 with max 2 items', () => {
-  const upcomingTracks = [
-    { videoId: 'DD9THuwNmZE', title: 'NIGHTMARE', artist: 'WesGhost' },
-    { videoId: 'nextVid2222', title: 'Second Upcoming', artist: 'Artist 2' },
-    { videoId: 'excessVid33', title: 'Excess Track', artist: 'Artist 3' }
-  ];
+test('buildReduxAddItemsAction builds ADD_ITEMS action at currentQueueIdx + 1 with up to 15 items', () => {
+  const generateTracks = (n) => Array.from({ length: n }, (_, i) => ({
+    videoId: `trackId${String(i).padStart(4, '0')}`,
+    title: `Track ${i}`,
+    artist: `Artist ${i}`
+  }));
 
-  const action = buildReduxAddItemsAction(200, upcomingTracks);
+  const action = buildReduxAddItemsAction(5, generateTracks(20));
   assert.notStrictEqual(action, null);
   assert.strictEqual(action.type, 'ADD_ITEMS');
-  assert.strictEqual(action.payload.index, 201);
-  assert.strictEqual(action.payload.items.length, 2);
-  assert.strictEqual(action.payload.items[0].playlistPanelVideoRenderer.videoId, 'DD9THuwNmZE');
-  assert.strictEqual(action.payload.items[1].playlistPanelVideoRenderer.videoId, 'nextVid2222');
+  assert.strictEqual(action.payload.index, 6);
+  assert.strictEqual(action.payload.items.length, 15);
+  assert.strictEqual(action.payload.items[0].playlistPanelVideoRenderer.videoId, 'trackId0000');
+  assert.strictEqual(action.payload.items[14].playlistPanelVideoRenderer.videoId, 'trackId0014');
   assert.strictEqual(action.payload.shouldAssignIds, true);
 });
 
@@ -790,4 +799,185 @@ test('buildReduxAddItemsAction handles currentQueueIdx -1 safely with index 0', 
   assert.strictEqual(action.payload.index, 0);
 });
 
+test('handleBridgeLoadVideo selects queue item via queueObj.selectQueueItem when available', () => {
+  let selectedItem = null;
+  const mockQueueObj = {
+    getItems: () => [
+      { playlistPanelVideoRenderer: { videoId: 'vid11111111' } },
+      { playlistPanelVideoRenderer: { videoId: 'vid22222222' } }
+    ],
+    selectQueueItem: (item) => {
+      selectedItem = item;
+    }
+  };
+
+  const result = handleBridgeLoadVideo({
+    currentVid: 'vid11111111',
+    videoId: 'vid22222222',
+    currentQueueIdx: 0,
+    queueItems: [
+      { videoId: 'vid11111111' },
+      { videoId: 'vid22222222' }
+    ],
+    queueObj: mockQueueObj
+  });
+
+  assert.strictEqual(result.actionTaken, 'queue_select_item');
+  assert.notStrictEqual(selectedItem, null);
+  assert.strictEqual(selectedItem.playlistPanelVideoRenderer.videoId, 'vid22222222');
+});
+
+test('syncQueueProperly moves existing items with MOVE_ITEM, adds new items with ADD_ITEMS, and prunes with removeItem', () => {
+  const dispatchedActions = [];
+  const removedQueueObjItems = [];
+
+  let queueState = [
+    { playlistPanelVideoRenderer: { videoId: 'playing000' } },
+    { playlistPanelVideoRenderer: { videoId: 'existing111' } },
+    { playlistPanelVideoRenderer: { videoId: 'existing222' } },
+    { playlistPanelVideoRenderer: { videoId: 'unwanted333' } }
+  ];
+
+  const mockStore = {
+    dispatch: (action) => {
+      dispatchedActions.push(action);
+      if (action.type === 'MOVE_ITEM') {
+        const { fromIndex, toIndex } = action.payload;
+        const item = queueState.splice(fromIndex, 1)[0];
+        queueState.splice(toIndex, 0, item);
+      } else if (action.type === 'ADD_ITEMS') {
+        const { index, items } = action.payload;
+        queueState.splice(index, 0, ...items);
+      } else if (action.type === 'REMOVE_ITEM') {
+        queueState.splice(action.payload, 1);
+      }
+    }
+  };
+
+  const mockQueueObj = {
+    getItems: () => queueState,
+    getCurrentItemIndex: () => 0,
+    removeItem: (item) => {
+      removedQueueObjItems.push(item);
+      const idx = queueState.indexOf(item);
+      if (idx !== -1) queueState.splice(idx, 1);
+    }
+  };
+
+  function syncQueueProperly(targetUpcomingTracks, queueObj, store) {
+    const curIdx = queueObj.getCurrentItemIndex();
+    const targetStartIdx = (typeof curIdx === 'number' && curIdx >= 0) ? curIdx + 1 : 0;
+
+    for (let i = 0; i < targetUpcomingTracks.length; i++) {
+      const desiredTrack = targetUpcomingTracks[i];
+      const desiredPos = targetStartIdx + i;
+      const freshItems = queueObj.getItems() || [];
+
+      const existingIdx = freshItems.findIndex((it, idx) => idx >= targetStartIdx && it?.playlistPanelVideoRenderer?.videoId === desiredTrack.videoId);
+
+      if (existingIdx === desiredPos) {
+        continue;
+      } else if (existingIdx > desiredPos) {
+        store.dispatch({
+          type: 'MOVE_ITEM',
+          payload: { fromIndex: existingIdx, toIndex: desiredPos }
+        });
+      } else {
+        const formatted = formatUpcomingTrackItem(desiredTrack);
+        if (formatted) {
+          store.dispatch({
+            type: 'ADD_ITEMS',
+            payload: {
+              index: desiredPos,
+              items: [formatted],
+              nextQueueItemId: 12345,
+              shouldAssignIds: true
+            }
+          });
+        }
+      }
+    }
+
+    const freshItemsAfter = queueObj.getItems() || [];
+    const maxAllowedIdx = targetStartIdx + targetUpcomingTracks.length;
+    for (let i = freshItemsAfter.length - 1; i >= maxAllowedIdx; i--) {
+      const it = freshItemsAfter[i];
+      if (it && typeof queueObj.removeItem === 'function') {
+        try {
+          queueObj.removeItem(it);
+          continue;
+        } catch (e) {}
+      }
+      try {
+        store.dispatch({ type: 'REMOVE_ITEM', payload: i });
+      } catch (e) {}
+    }
+  }
+
+  // Target: want 'existing222' first (swap), then brand new 'brandNew444'
+  const targetTracks = [
+    { videoId: 'existing222', title: 'Song 2', artist: 'Artist 2' },
+    { videoId: 'brandNew444', title: 'Brand New', artist: 'Artist 4' }
+  ];
+
+  syncQueueProperly(targetTracks, mockQueueObj, mockStore);
+
+  // First item was moved via MOVE_ITEM
+  const moveAction = dispatchedActions.find(a => a.type === 'MOVE_ITEM');
+  assert.notStrictEqual(moveAction, undefined);
+  assert.strictEqual(moveAction.payload.fromIndex, 2);
+  assert.strictEqual(moveAction.payload.toIndex, 1);
+
+  // Second item was added via ADD_ITEMS
+  const addAction = dispatchedActions.find(a => a.type === 'ADD_ITEMS');
+  assert.notStrictEqual(addAction, undefined);
+  assert.strictEqual(addAction.payload.items[0].playlistPanelVideoRenderer.videoId, 'brandNew444');
+
+  // Excess items were pruned
+  assert.ok(removedQueueObjItems.length > 0);
+  assert.strictEqual(queueState[0].playlistPanelVideoRenderer.videoId, 'playing000');
+  assert.strictEqual(queueState[1].playlistPanelVideoRenderer.videoId, 'existing222');
+  assert.strictEqual(queueState[2].playlistPanelVideoRenderer.videoId, 'brandNew444');
+});
+
+test('changeTrackViaQueue uses handleNavigationEndpoint without direct player bypass', () => {
+  let navEndpointCalled = null;
+  const mockApp = {
+    handleNavigationEndpoint: (ep) => {
+      navEndpointCalled = ep;
+    }
+  };
+
+  const queueItems = [
+    { playlistPanelVideoRenderer: { videoId: 'curVid000', navigationEndpoint: { watchEndpoint: { videoId: 'curVid000' } } } },
+    { playlistPanelVideoRenderer: { videoId: 'targetVid111', navigationEndpoint: { watchEndpoint: { videoId: 'targetVid111' } } } }
+  ];
+
+  const mockQueueObj = {
+    getItems: () => queueItems,
+    getCurrentItemIndex: () => 0
+  };
+
+  function changeTrackViaQueue({ videoId, app, queueObj, store }) {
+    const items = queueObj.getItems() || [];
+    const matchingItem = items.find(it => it?.playlistPanelVideoRenderer?.videoId === videoId);
+    if (matchingItem && app && typeof app.handleNavigationEndpoint === 'function' && matchingItem.playlistPanelVideoRenderer?.navigationEndpoint) {
+      app.handleNavigationEndpoint(matchingItem.playlistPanelVideoRenderer.navigationEndpoint);
+      return 'native_nav_endpoint';
+    }
+    return 'fallback';
+  }
+
+  const result = changeTrackViaQueue({
+    videoId: 'targetVid111',
+    app: mockApp,
+    queueObj: mockQueueObj
+  });
+
+  assert.strictEqual(result, 'native_nav_endpoint');
+  assert.strictEqual(navEndpointCalled?.watchEndpoint?.videoId, 'targetVid111');
+});
+
 runAllTests();
+
+

@@ -36,6 +36,7 @@ function sanitizePacket(packet) {
         'PAUSE',
         'SEEK',
         'TRACK_CHANGE',
+        'QUEUE_SYNC',
         'PEER_JOIN',
         'PEER_LEAVE',
         'PARTY_COMMAND',
@@ -57,6 +58,12 @@ function sanitizePacket(packet) {
             // Omit empty string rather than dropping packet
         } else if (typeof packet.videoId === 'string') {
             return null;
+        }
+    }
+
+    if (packet.currentVideoId !== undefined && packet.currentVideoId !== null) {
+        if (typeof packet.currentVideoId === 'string' && validateVideoId(packet.currentVideoId)) {
+            sanitized.currentVideoId = packet.currentVideoId;
         }
     }
 
@@ -82,7 +89,7 @@ function sanitizePacket(packet) {
     if (Array.isArray(packet.upcomingTracks)) {
         sanitized.upcomingTracks = packet.upcomingTracks
             .filter(item => item && typeof item.videoId === 'string' && validateVideoId(item.videoId))
-            .slice(0, 2)
+            .slice(0, 15)
             .map(item => ({
                 videoId: item.videoId,
                 title: typeof item.title === 'string' ? item.title.slice(0, 150) : '',
@@ -654,6 +661,11 @@ class WebRtcSyncEngine {
                 if (signal.hostName) this.hostName = signal.hostName;
                 console.log(`[Listen Together Listener] Handling TRACK_CHANGE from host: track="${signal.track}" by "${signal.artist}" (ID: ${signal.videoId})`);
                 this.onTrackChange(signal);
+            } else if (type === 'QUEUE_SYNC') {
+                this.lastHostActivity = Date.now();
+                if (signal.hostName) this.hostName = signal.hostName;
+                console.log(`[Listen Together Listener] Received QUEUE_SYNC from host: ${signal.upcomingTracks ? signal.upcomingTracks.length : 0} upcoming tracks`);
+                this.onSyncAction(signal);
             } else if (type === 'HOST_LEAVE') {
                 console.log(`[Listen Together] Host left room: ${this.roomId}`);
                 this.onConnectionStatus('host_disconnected', this.roomId);
@@ -704,6 +716,16 @@ class WebRtcSyncEngine {
         this.broadcastPacket({
             type: 'TRACK_CHANGE',
             ...trackInfo,
+            hostName: this.userName,
+            timestamp: Date.now()
+        });
+    }
+
+    notifyQueueSync(queueData) {
+        if (!this.isHost) return;
+        this.broadcastPacket({
+            type: 'QUEUE_SYNC',
+            ...queueData,
             hostName: this.userName,
             timestamp: Date.now()
         });
