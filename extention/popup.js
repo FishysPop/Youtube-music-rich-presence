@@ -39,7 +39,9 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         logContent.textContent = errorLogs.join("\n") || "No errors yet.";
         optionsPanel.style.display = "block";
-        logContent.scrollTop = logContent.scrollHeight;
+        setTimeout(() => {
+          optionsPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }, 30);
       }
     });
     hideOptionsButton.addEventListener("click", () => {
@@ -346,17 +348,63 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  function parseSessionInput(rawInput) {
+    if (!rawInput || typeof rawInput !== 'string') return null;
+    const input = rawInput.trim();
+    if (!input) return null;
+
+    if (/^https?:\/\//i.test(input) || input.includes('://')) {
+      try {
+        const u = new URL(input);
+        const q = u.searchParams.get('ytm-session') || u.searchParams.get('session');
+        if (q && /^[a-zA-Z0-9_-]+$/.test(q)) return q.toUpperCase();
+
+        const h = u.hash || '';
+        const m = h.match(/(?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
+        if (m && m[1]) return m[1].toUpperCase();
+      } catch (e) {}
+    }
+
+    const paramMatch = input.match(/(?:[?#&]|^)(?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
+    if (paramMatch && paramMatch[1]) {
+      return paramMatch[1].toUpperCase();
+    }
+
+    const ytmMatch = input.match(/\b(YTM-[a-zA-Z0-9_-]+)\b/i);
+    if (ytmMatch && ytmMatch[1]) {
+      return ytmMatch[1].toUpperCase();
+    }
+
+    if (/^[a-zA-Z0-9]{6}$/.test(input)) {
+      return `YTM-${input.toUpperCase()}`;
+    }
+
+    if (/^[a-zA-Z0-9_-]{3,32}$/.test(input)) {
+      return input.toUpperCase();
+    }
+
+    return null;
+  }
+
+  const executeJoin = () => {
+    const code = parseSessionInput(joinRoomInput.value);
+    if (!code) return;
+    joinSessionBtn.disabled = true;
+    chrome.runtime.sendMessage({ type: "JOIN_LISTEN_SESSION", roomId: code }, (res) => {
+      const err = chrome.runtime.lastError;
+      joinSessionBtn.disabled = false;
+      joinRoomInput.value = "";
+      queryListenSessionStatus();
+    });
+  };
+
   if (joinSessionBtn && joinRoomInput) {
-    joinSessionBtn.addEventListener("click", () => {
-      const code = joinRoomInput.value.trim().toUpperCase();
-      if (!code) return;
-      joinSessionBtn.disabled = true;
-      chrome.runtime.sendMessage({ type: "JOIN_LISTEN_SESSION", roomId: code }, (res) => {
-        const err = chrome.runtime.lastError;
-        joinSessionBtn.disabled = false;
-        joinRoomInput.value = "";
-        queryListenSessionStatus();
-      });
+    joinSessionBtn.addEventListener("click", executeJoin);
+    joinRoomInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        executeJoin();
+      }
     });
   }
 
@@ -374,7 +422,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (copyInviteBtn && activeRoomCode) {
     copyInviteBtn.addEventListener("click", () => {
       const code = activeRoomCode.textContent.trim();
-      const inviteUrl = `https://music.youtube.com/#ytm-session=${code}`;
+      const inviteUrl = `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${code}`;
       navigator.clipboard.writeText(inviteUrl).then(() => {
         copyInviteBtn.textContent = "Copied!";
         setTimeout(() => {

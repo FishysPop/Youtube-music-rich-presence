@@ -9,20 +9,37 @@
     "48": "icon.png",
     "128": "icon.png"
   },
-    "permissions": [
-      "activeTab",
-      "scripting",
-      "storage",
-      "nativeMessaging",
-      "alarms"
-    ],
-  "host_permissions": [
-    "https://music.youtube.com/*"
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "storage",
+    "nativeMessaging",
+    "alarms"
   ],
+  "host_permissions": [
+    "https://music.youtube.com/*",
+    "https://fishyspop.github.io/*"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://fishyspop.github.io/*"
+    ]
+  },
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
+    {
+      "matches": ["https://fishyspop.github.io/*"],
+      "js": ["gateway-interceptor.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["early-url-capture.js"],
+      "run_at": "document_start"
+    },
     {
       "matches": ["https://music.youtube.com/*"],
       "js": ["log-forwarder.js", "webrtc-sync.js", "content.js"],

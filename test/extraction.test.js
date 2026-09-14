@@ -185,7 +185,7 @@ test('buildActivityButtons falls back to search link when videoId is missing or 
 test('buildActivityButtons includes Listen Together button when hosting session', () => {
     const buttons = buildActivityButtons('Get Lucky', 'Daft Punk', '5NV6Rdv1a3I', 'YTM-ABC123', true);
     assert.strictEqual(buttons[0].label, 'Listen Along');
-    assert.strictEqual(buttons[0].url, 'https://music.youtube.com/#ytm-session=YTM-ABC123');
+    assert.strictEqual(buttons[0].url, 'https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=YTM-ABC123');
     assert.strictEqual(buttons[1].label, 'Link');
     assert.strictEqual(buttons[1].url, 'https://music.youtube.com/watch?v=5NV6Rdv1a3I');
 });

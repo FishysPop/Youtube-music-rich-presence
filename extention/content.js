@@ -109,7 +109,7 @@ function buildActivityButtons(track, artist, videoId, roomId, isHost) {
 
   if (roomId && isHost) {
     return [
-      { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${roomId}` },
+      { label: "Listen Along", url: `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${roomId}` },
       { label: "Link", url: directOrSearchUrl }
     ];
   }
@@ -686,12 +686,31 @@ function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, 
   console.log(`[Listen Together] Posting LOAD_VIDEO to page-bridge for videoId: ${videoId}`);
   showSyncToast(`${trackTitle || 'Track'}${artist ? ' - ' + artist : ''}`);
 
+  const isOnWatch = window.location.pathname.startsWith('/watch');
+  const hasActivePlayer = Boolean(isOnWatch && getCurrentVideoId() && findVideoElement());
+
+  if (!isOnWatch || !hasActivePlayer) {
+    if (syncEngine && syncEngine.role === 'LISTENER' && syncEngine.roomId) {
+      chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: syncEngine.roomId } });
+    }
+    const searchParams = new URLSearchParams();
+    searchParams.set('v', videoId);
+    if (typeof currentTime === 'number' && currentTime > 0) {
+      searchParams.set('t', Math.floor(currentTime));
+    }
+    const targetUrl = `/watch?${searchParams.toString()}`;
+    console.log(`[Listen Together] Direct watch navigation to: ${targetUrl}`);
+    window.location.assign(targetUrl);
+    return;
+  }
+
+  console.log(`[Listen Together] Posting LOAD_VIDEO to page-bridge for videoId: ${videoId}`);
   window.postMessage({
     source: 'ytm-sync-isolated',
     action: 'LOAD_VIDEO',
     videoId: videoId,
-    playlistId: playlistId || undefined,
-    playlistIndex: typeof playlistIndex === 'number' ? playlistIndex : undefined,
+    forceWatchNavigation: !hasActivePlayer,
+    forceWatchNavigation: false,
     nextVideoId: nextVideoId || undefined,
     upcomingTracks: (Array.isArray(upcomingTracks) && upcomingTracks.length > 0) ? upcomingTracks : (latestPageBridgeUpcomingTracks.length > 0 ? latestPageBridgeUpcomingTracks : undefined),
     track: trackTitle,
@@ -700,6 +719,20 @@ function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, 
     currentTime: typeof currentTime === 'number' ? currentTime : 0,
     isPlaying: typeof isPlaying === 'boolean' ? isPlaying : true
   }, '*');
+
+  if (!isOnWatch || !hasActivePlayer) {
+    setTimeout(() => {
+      if (!window.location.pathname.startsWith('/watch')) {
+        console.log('[Listen Together] Page bridge did not navigate to /watch; forcing location.assign fallback');
+        const searchParams = new URLSearchParams();
+        searchParams.set('v', videoId);
+        if (typeof currentTime === 'number' && currentTime > 0) {
+          searchParams.set('t', Math.floor(currentTime));
+        }
+        window.location.assign(`/watch?${searchParams.toString()}`);
+      }
+    }, 4000);
+  }
 }
 
 function handleRemoteSyncAction(packet) {
@@ -743,9 +776,21 @@ function handleRemoteSyncAction(packet) {
     return;
   }
 
+  const isOnWatchPage = window.location.pathname.startsWith('/watch');
   const currentVid = getCurrentVideoId();
-  if (packet.videoId && (packet.videoId !== lastSyncedVideoId || (currentVid && packet.videoId !== currentVid))) {
-    console.log(`[Listen Together Listener] handleRemoteSyncAction detected track mismatch (packet.videoId=${packet.videoId}, currentVid=${currentVid}, lastSynced=${lastSyncedVideoId}). Triggering track change.`);
+  const video = findVideoElement();
+  const hasActivePlayer = Boolean(isOnWatchPage && currentVid && video);
+
+  const needsNavigation = Boolean(
+    packet.videoId && (
+      !hasActivePlayer ||
+      currentVid !== packet.videoId ||
+      lastSyncedVideoId !== packet.videoId
+    )
+  );
+
+  if (needsNavigation) {
+    console.log(`[Listen Together Listener] handleRemoteSyncAction detected track mismatch or inactive player (packet.videoId=${packet.videoId}, currentVid=${currentVid}, lastSynced=${lastSyncedVideoId}, hasActivePlayer=${hasActivePlayer}, isOnWatch=${isOnWatchPage}). Triggering track change.`);
     handleRemoteTrackChange(packet);
     return;
   }
@@ -754,7 +799,6 @@ function handleRemoteSyncAction(packet) {
     return;
   }
 
-  const video = findVideoElement();
   if (!video) return;
 
   const driftSec = window.ytmCalculateDrift ? window.ytmCalculateDrift(video.currentTime, packet) : 0;
@@ -823,10 +867,22 @@ function handleRemoteTrackChange(packet) {
     }, '*');
   }
 
+  const isOnWatchPage = window.location.pathname.startsWith('/watch');
   const currentVid = getCurrentVideoId();
-  console.log(`[Listen Together Listener] handleRemoteTrackChange: packet.videoId=${packet.videoId}, currentVid=${currentVid}, lastSyncedVideoId=${lastSyncedVideoId}`);
+  const video = findVideoElement();
+  const hasActivePlayer = Boolean(isOnWatchPage && currentVid && video);
 
-  if (packet.videoId && (packet.videoId !== lastSyncedVideoId || (currentVid && packet.videoId !== currentVid))) {
+  const needsNavigation = Boolean(
+    packet.videoId && (
+      !hasActivePlayer ||
+      currentVid !== packet.videoId ||
+      lastSyncedVideoId !== packet.videoId
+    )
+  );
+
+  console.log(`[Listen Together Listener] handleRemoteTrackChange: packet.videoId=${packet.videoId}, currentVid=${currentVid}, lastSyncedVideoId=${lastSyncedVideoId}, hasActivePlayer=${hasActivePlayer}, isOnWatch=${isOnWatchPage}`);
+
+  if (needsNavigation) {
     console.log(`[Listen Together Listener] Triggering navigation for: "${packet.track}" (ID: ${packet.videoId})`);
     navigateToVideo(packet.videoId, packet.track, packet.artist, packet.albumArtUrl, packet.currentTime, packet.isPlaying, packet.playlistId, packet.playlistIndex, packet.nextVideoId, packet.upcomingTracks);
   }
@@ -1166,7 +1222,7 @@ function renderPopoverContent() {
       copyBtn.onmouseenter = () => { copyBtn.style.background = 'rgba(62, 166, 255, 0.1)'; };
       copyBtn.onmouseleave = () => { copyBtn.style.background = 'transparent'; };
       copyBtn.onclick = () => {
-        const url = `https://music.youtube.com/#ytm-session=${roomId}`;
+        const url = `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${roomId}`;
         navigator.clipboard.writeText(url).then(() => {
           copyBtn.textContent = 'Copied!';
           setTimeout(() => { copyBtn.textContent = 'Copy Link'; }, 2000);
@@ -1211,7 +1267,7 @@ function renderPopoverContent() {
       <div style="padding:10px 16px 12px 16px; border-top:1px solid rgba(255, 255, 255, 0.08);">
         <div style="font-size:12px; color:rgba(255, 255, 255, 0.6); margin-bottom:8px;">Join with room code</div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <input type="text" id="ytm-popover-join-input" placeholder="YTM-XXXXXX" style="background:#181818; border:1px solid rgba(255, 255, 255, 0.15); border-radius:4px; height:34px; padding:0 10px; color:#ffffff; font-size:13px; letter-spacing:0.5px; text-transform:uppercase; outline:none; flex:1; box-sizing:border-box; min-width:0;">
+          <input type="text" id="ytm-popover-join-input" placeholder="Room code or link" style="background:#181818; border:1px solid rgba(255, 255, 255, 0.15); border-radius:4px; height:34px; padding:0 10px; color:#ffffff; font-size:13px; letter-spacing:0.5px; outline:none; flex:1; box-sizing:border-box; min-width:0;">
           <button id="ytm-popover-join-btn" style="background:transparent; color:#3ea6ff; border-radius:2px; height:34px; padding:0 10px; font-weight:500; font-size:13px; text-transform:uppercase; letter-spacing:0.5px; border:none; cursor:pointer; transition:background 0.15s; flex-shrink:0;">
             Join
           </button>
@@ -1241,13 +1297,19 @@ function renderPopoverContent() {
     const joinBtn = document.getElementById('ytm-popover-join-btn');
     const joinInput = document.getElementById('ytm-popover-join-input');
     if (joinBtn && joinInput) {
-      joinBtn.onmouseenter = () => { joinBtn.style.background = 'rgba(62, 166, 255, 0.1)'; };
-      joinBtn.onmouseleave = () => { joinBtn.style.background = 'transparent'; };
-      joinBtn.onclick = () => {
-        const code = joinInput.value.trim().toUpperCase();
+      const handlePopoverJoin = () => {
+        const code = parseSessionInput(joinInput.value);
         if (!code) return;
         initSyncEngine();
         if (syncEngine) {
+          if (syncEngine.isHost && syncEngine.roomId === code) {
+            showSyncToast(`You are already hosting session ${code}`);
+            return;
+          }
+          if (syncEngine.role === 'LISTENER' && syncEngine.roomId === code) {
+            showSyncToast(`Already connected to session ${code}`);
+            return;
+          }
           hostEmptyStartTime = null;
           const roomId = syncEngine.joinRoom(code);
           chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: roomId } });
@@ -1256,25 +1318,144 @@ function renderPopoverContent() {
           showSyncToast(`Joining session: ${roomId}`);
         }
       };
+
+      joinBtn.onmouseenter = () => { joinBtn.style.background = 'rgba(62, 166, 255, 0.1)'; };
+      joinBtn.onmouseleave = () => { joinBtn.style.background = 'transparent'; };
+      joinBtn.onclick = handlePopoverJoin;
+      joinInput.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handlePopoverJoin();
+        }
+      };
     }
   }
 }
 
-function checkUrlHashSession() {
-  const hash = window.location.hash || '';
-  const match = hash.match(/ytm-session=([A-Za-z0-9_-]+)/i);
-  if (match && match[1]) {
-    initSyncEngine();
-    if (syncEngine) {
-      const roomId = match[1].toUpperCase();
-      chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: roomId } });
-      syncEngine.joinRoom(roomId);
-      updatePlayerBarButton();
-      showSyncToast(`Joining session: ${roomId}`);
-      try {
-        history.replaceState(null, '', window.location.pathname + window.location.search);
-      } catch (e) {}
+function parseSessionInput(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') return null;
+  const input = rawInput.trim();
+  if (!input) return null;
+
+  if (/^https?:\/\//i.test(input) || input.includes('://')) {
+    try {
+      const u = new URL(input);
+      const q = u.searchParams.get('ytm-session') || u.searchParams.get('session');
+      if (q && /^[a-zA-Z0-9_-]+$/.test(q)) return q.toUpperCase();
+
+      const h = u.hash || '';
+      const m = h.match(/(?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
+      if (m && m[1]) return m[1].toUpperCase();
+    } catch (e) {}
+  }
+
+  const paramMatch = input.match(/(?:[?#&]|^)(?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
+  if (paramMatch && paramMatch[1]) {
+    return paramMatch[1].toUpperCase();
+  }
+
+  const ytmMatch = input.match(/\b(YTM-[a-zA-Z0-9_-]+)\b/i);
+  if (ytmMatch && ytmMatch[1]) {
+    return ytmMatch[1].toUpperCase();
+  }
+
+  if (/^[a-zA-Z0-9]{6}$/.test(input)) {
+    return `YTM-${input.toUpperCase()}`;
+  }
+
+  if (/^[a-zA-Z0-9_-]{3,32}$/.test(input)) {
+    return input.toUpperCase();
+  }
+
+  return null;
+}
+
+function extractSessionFromUrl(rawUrl) {
+  return parseSessionInput(rawUrl);
+}
+
+function cleanSessionUrl() {
+  try {
+    const cleanUrl = new URL(window.location.href);
+    let changed = false;
+    if (cleanUrl.searchParams.has('ytm-session')) {
+      cleanUrl.searchParams.delete('ytm-session');
+      changed = true;
     }
+    if (cleanUrl.searchParams.has('session')) {
+      cleanUrl.searchParams.delete('session');
+      changed = true;
+    }
+    if (cleanUrl.hash.includes('ytm-session') || cleanUrl.hash.includes('session=')) {
+      cleanUrl.hash = '';
+      changed = true;
+    }
+    if (changed) {
+      history.replaceState(null, '', cleanUrl.pathname + (cleanUrl.search || '') + cleanUrl.hash);
+    }
+  } catch (e) {}
+}
+
+function joinListenerSession(roomId) {
+  if (!roomId) return;
+  const normalizedId = parseSessionInput(roomId) || (typeof roomId === 'string' ? roomId.trim().toUpperCase() : null);
+  if (!normalizedId) return;
+  initSyncEngine();
+  if (syncEngine) {
+    if (syncEngine.isHost && syncEngine.roomId === normalizedId) {
+      showSyncToast(`You are already hosting session ${normalizedId}`);
+      cleanSessionUrl();
+      return;
+    }
+    if (syncEngine.role === 'LISTENER' && syncEngine.roomId === normalizedId) {
+      showSyncToast(`Already connected to session ${normalizedId}`);
+      cleanSessionUrl();
+      return;
+    }
+    hostEmptyStartTime = null;
+    chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: normalizedId } });
+    syncEngine.joinRoom(normalizedId);
+    updatePlayerBarButton();
+    showSyncToast(`Joining session: ${normalizedId}`);
+    cleanSessionUrl();
+  }
+}
+
+function checkUrlSession() {
+  let roomId = null;
+
+  if (window.__ytmPendingSession) {
+    roomId = window.__ytmPendingSession;
+    window.__ytmPendingSession = null;
+  }
+
+  if (!roomId) {
+    try {
+      const stored = sessionStorage.getItem('__ytm_pending_session');
+      if (stored) {
+        roomId = stored;
+        sessionStorage.removeItem('__ytm_pending_session');
+      }
+    } catch (e) {}
+  }
+
+  if (!roomId) {
+    roomId = extractSessionFromUrl(window.location.href);
+  }
+
+  if (roomId) {
+    joinListenerSession(roomId);
+    return;
+  }
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(['__ytm_pending_session'], (res) => {
+      if (res && res.__ytm_pending_session) {
+        const pending = res.__ytm_pending_session;
+        chrome.storage.local.remove('__ytm_pending_session');
+        joinListenerSession(pending);
+      }
+    });
   }
 }
 
@@ -1459,9 +1640,8 @@ function updateTrackInfo(forceSend = false) {
   }
   
   attachVideoListeners();
-  clearTimeout(updateDebounceTimer);
 
-  updateDebounceTimer = setTimeout(() => {
+  const doUpdate = () => {
     if (!isExtensionContextStillValid()) return;
     
     const currentTrackInfo = getCurrentTrackInfo();
@@ -1605,12 +1785,25 @@ function updateTrackInfo(forceSend = false) {
         }
       }
     }
-  }, 250);
+  };
+
+  if (forceSend) {
+    if (updateDebounceTimer) {
+      clearTimeout(updateDebounceTimer);
+      updateDebounceTimer = null;
+    }
+    doUpdate();
+  } else {
+    clearTimeout(updateDebounceTimer);
+    updateDebounceTimer = setTimeout(doUpdate, 200);
+  }
 }
 
 function restoreActiveSession() {
+  if (syncEngine && syncEngine.role !== 'NONE') return;
   chrome.storage.local.get(['listenTogetherSession'], (res) => {
     if (chrome.runtime.lastError) return;
+    if (syncEngine && syncEngine.role !== 'NONE') return;
     const session = res.listenTogetherSession;
     if (session && session.roomId && session.role && session.role !== 'NONE') {
       if (session.role === 'HOST') {
@@ -1646,14 +1839,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else {
       if (sendResponse) sendResponse({ success: false, error: 'Sync engine unavailable' });
     }
+  } else if (message.type === 'SHOW_TOAST') {
+    if (message.message) {
+      showSyncToast(message.message);
+    }
+    if (sendResponse) sendResponse({ success: true });
     return false;
-  } else if (message.type === 'JOIN_LISTEN_SESSION') {
+  } else if (message.type === 'JOIN_LISTEN_SESSION' || message.type === 'JOIN_SESSION') {
     if (syncEngine && message.roomId) {
+      const targetRoomId = parseSessionInput(message.roomId) || (typeof message.roomId === 'string' ? message.roomId.trim().toUpperCase() : null);
+      if (!targetRoomId) {
+        if (sendResponse) sendResponse({ success: false, error: 'Invalid room ID or link' });
+        return false;
+      }
+      if (syncEngine.isHost && syncEngine.roomId === targetRoomId) {
+        showSyncToast(`You are already hosting session ${targetRoomId}`);
+        if (sendResponse) sendResponse({ success: true, roomId: targetRoomId, isHost: true, alreadyConnected: true });
+        return false;
+      }
+      if (syncEngine.role === 'LISTENER' && syncEngine.roomId === targetRoomId) {
+        showSyncToast(`Already connected to session ${targetRoomId}`);
+        if (sendResponse) sendResponse({ success: true, roomId: targetRoomId, isHost: false, alreadyConnected: true });
+        return false;
+      }
       hostEmptyStartTime = null;
-      const roomId = syncEngine.joinRoom(message.roomId);
-      chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: roomId } });
-      showSyncToast(`Joining session: ${roomId}`);
-      if (sendResponse) sendResponse({ success: true, roomId, isHost: false });
+      waitForYouTubeMusicReady(() => {
+        const roomId = syncEngine.joinRoom(targetRoomId);
+        chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: roomId } });
+        showSyncToast(`Joining session: ${roomId}`);
+        updatePlayerBarButton();
+      });
+      if (sendResponse) sendResponse({ success: true, roomId: targetRoomId, isHost: false });
     } else {
       if (sendResponse) sendResponse({ success: false, error: 'Sync engine or room ID missing' });
     }
@@ -1688,10 +1904,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+function waitForYouTubeMusicReady(callback) {
+  let done = false;
+  let timer = null;
+  let pollInterval = null;
+
+  function finish() {
+    if (done) return;
+    done = true;
+    if (timer) clearTimeout(timer);
+    if (pollInterval) clearInterval(pollInterval);
+    window.removeEventListener('yt-page-data-updated', check);
+    window.removeEventListener('yt-navigate-finish', check);
+    window.removeEventListener('load', check);
+    callback();
+  }
+
+  function check() {
+    const isDocComplete = document.readyState === 'complete';
+    const app = document.querySelector('ytmusic-app');
+    const playerBar = document.querySelector('ytmusic-player-bar');
+    const player = document.getElementById('movie_player') || document.querySelector('video');
+    if (isDocComplete && app && playerBar && player) {
+      finish();
+    }
+  }
+
+  const isDocComplete = document.readyState === 'complete';
+  const app = document.querySelector('ytmusic-app');
+  const playerBar = document.querySelector('ytmusic-player-bar');
+  const player = document.getElementById('movie_player') || document.querySelector('video');
+  const perfNow = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : 0;
+
+  if (isDocComplete && app && playerBar && player && perfNow > 2000) {
+    callback();
+    return;
+  }
+
+  window.addEventListener('yt-page-data-updated', check);
+  window.addEventListener('yt-navigate-finish', check);
+  window.addEventListener('load', check);
+
+  pollInterval = setInterval(check, 150);
+  timer = setTimeout(finish, 4000);
+}
+
 initSyncEngine();
-checkUrlHashSession();
-restoreActiveSession();
 updateTrackInfo(true);
+waitForYouTubeMusicReady(() => {
+  checkUrlSession();
+  restoreActiveSession();
+  updateTrackInfo(true);
+  updatePlayerBarButton();
+});
 
 navigationFinishListener = () => {
   lastSentTrack = null;
@@ -1708,10 +1973,12 @@ navigationFinishListener = () => {
     pauseGracePeriodTimer = null;
   }
   pauseGracePeriodExpired = false;
+  checkUrlSession();
   updateTrackInfo(true);
 };
 
 window.addEventListener('yt-navigate-finish', navigationFinishListener);
+window.addEventListener('hashchange', checkUrlSession);
 
 const playerBarObserverTarget = document.querySelector('ytmusic-player-bar');
 if (playerBarObserverTarget) {

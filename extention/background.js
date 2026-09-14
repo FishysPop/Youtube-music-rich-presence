@@ -523,6 +523,7 @@ function processNewActivity(message) {
 
         const buttons = (activeSessionRoomId && activeSessionRole === 'HOST') ? [
             { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${activeSessionRoomId}` },
+            { label: "Listen Along", url: `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${activeSessionRoomId}` },
             { label: "Link", url: directOrSearchUrl }
         ] : [
             { label: "Link", url: directOrSearchUrl },
@@ -607,6 +608,7 @@ function processNewActivity(message) {
             const directOrSearchUrl = `https://music.youtube.com/watch?v=${message.videoId}`;
             currentSongActivity.buttons = (activeSessionRoomId && activeSessionRole === 'HOST') ? [
                 { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${activeSessionRoomId}` },
+                { label: "Listen Along", url: `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${activeSessionRoomId}` },
                 { label: "Link", url: directOrSearchUrl }
             ] : [
                 { label: "Link", url: directOrSearchUrl },
@@ -919,6 +921,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (activeSessionRoomId && activeSessionRole === 'HOST') {
                 currentSongActivity.buttons = [
                     { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${activeSessionRoomId}` },
+                    { label: "Listen Along", url: `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${activeSessionRoomId}` },
                     { label: "Link", url: `https://music.youtube.com/search?q=${encodeURIComponent(`${currentSongActivity.state} ${currentSongActivity.details}`)}` }
                 ];
                 currentSongActivity.party = {
@@ -1031,6 +1034,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     updateStatus('disconnected', 'Manually disconnected by user.', null, pendingActivity, null, false);
     if (sendResponse) sendResponse({ status: "Native host disconnect initiated and state updated" });
     return true;
+  } else if (message && message.type === 'GATEWAY_JOIN_SESSION') {
+      const senderTabId = sender && sender.tab ? sender.tab.id : null;
+      handleGatewayJoinSession(message.roomId, senderTabId, sendResponse);
+      return true;
   } else if (message && message.type === 'OPEN_OPTIONS_PAGE') {
       chrome.runtime.openOptionsPage();
       if (sendResponse) sendResponse({ status: "Options page open request sent" });
@@ -1039,6 +1046,189 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   return false;
 });
+
+function parseSessionInput(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') return null;
+  const input = rawInput.trim();
+  if (!input) return null;
+
+  if (/^https?:\/\//i.test(input) || input.includes('://')) {
+    try {
+      const u = new URL(input);
+      const q = u.searchParams.get('ytm-session') || u.searchParams.get('session');
+      if (q && /^[a-zA-Z0-9_-]+$/.test(q)) return q.toUpperCase();
+
+      const h = u.hash || '';
+      const m = h.match(/(?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
+      if (m && m[1]) return m[1].toUpperCase();
+    } catch (e) {}
+  }
+
+  const paramMatch = input.match(/(?:[?#&]|^)(?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
+  if (paramMatch && paramMatch[1]) {
+    return paramMatch[1].toUpperCase();
+  }
+
+  const ytmMatch = input.match(/\b(YTM-[a-zA-Z0-9_-]+)\b/i);
+  if (ytmMatch && ytmMatch[1]) {
+    return ytmMatch[1].toUpperCase();
+  }
+
+  if (/^[a-zA-Z0-9]{6}$/.test(input)) {
+    return `YTM-${input.toUpperCase()}`;
+  }
+
+  if (/^[a-zA-Z0-9_-]{3,32}$/.test(input)) {
+    return input.toUpperCase();
+  }
+
+  return null;
+}
+
+function handleGatewayJoinSession(roomId, senderTabId, sendResponse) {
+  const normalizedRoomId = parseSessionInput(roomId) || (typeof roomId === 'string' ? roomId.trim().toUpperCase() : null);
+  if (!normalizedRoomId) {
+    if (sendResponse) sendResponse({ success: false, error: 'Missing or invalid room ID' });
+    return;
+  }
+
+  const isSelfHost = (activeSessionRole === 'HOST' && activeSessionRoomId === normalizedRoomId);
+  const isAlreadyListening = (activeSessionRole === 'LISTENER' && activeSessionRoomId === normalizedRoomId);
+
+  chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
+    if (chrome.runtime.lastError) {
+      if (sendResponse) sendResponse({ success: false, error: chrome.runtime.lastError.message });
+      return;
+    }
+
+    const existingTabs = (tabs || []).filter(t => !senderTabId || t.id !== senderTabId);
+
+    if (existingTabs.length > 0) {
+      const targetTab = existingTabs.find(t => t.active) || existingTabs[0];
+      chrome.tabs.update(targetTab.id, { active: true }, () => {
+        if (targetTab.windowId) {
+          chrome.windows.update(targetTab.windowId, { focused: true }).catch(() => {});
+        }
+        if (isSelfHost) {
+          chrome.tabs.sendMessage(targetTab.id, {
+            type: 'SHOW_TOAST',
+            message: `You are already hosting session ${normalizedRoomId}`
+          }, () => { if (chrome.runtime.lastError) {} });
+        } else if (isAlreadyListening) {
+          chrome.tabs.sendMessage(targetTab.id, {
+            type: 'SHOW_TOAST',
+            message: `Already connected to session ${normalizedRoomId}`
+          }, () => { if (chrome.runtime.lastError) {} });
+        } else {
+          chrome.tabs.sendMessage(targetTab.id, { type: 'JOIN_LISTEN_SESSION', roomId: normalizedRoomId }, () => {
+            if (chrome.runtime.lastError) {}
+          });
+        }
+        if (senderTabId) {
+          chrome.tabs.remove(senderTabId).catch(() => {});
+        }
+        if (sendResponse) {
+          sendResponse({
+            success: true,
+            action: isSelfHost ? 'ALREADY_HOST' : (isAlreadyListening ? 'ALREADY_LISTENING' : 'FOCUSED_EXISTING'),
+            tabId: targetTab.id
+          });
+        }
+      });
+    } else {
+      if (isSelfHost || isAlreadyListening) {
+        chrome.tabs.create({ url: 'https://music.youtube.com/', active: true }, (newTab) => {
+          if (senderTabId) {
+            chrome.tabs.remove(senderTabId).catch(() => {});
+          }
+          if (sendResponse) sendResponse({ success: true, action: 'OPENED_YTM', tabId: newTab ? newTab.id : null });
+        });
+      } else {
+        chrome.storage.local.set({ __ytm_pending_session: normalizedRoomId });
+        chrome.tabs.create({ url: `https://music.youtube.com/?ytm-session=${normalizedRoomId}`, active: true }, (newTab) => {
+          if (senderTabId) {
+            chrome.tabs.remove(senderTabId).catch(() => {});
+          }
+          if (sendResponse) sendResponse({ success: true, action: 'CREATED_NEW', tabId: newTab ? newTab.id : null });
+        });
+      }
+    }
+  });
+}
+
+if (chrome.runtime.onMessageExternal) {
+  chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+    if (message && message.type === 'GATEWAY_JOIN_SESSION') {
+      const senderTabId = sender && sender.tab ? sender.tab.id : null;
+      handleGatewayJoinSession(message.roomId, senderTabId, sendResponse);
+      return true;
+    }
+    return false;
+  });
+}
+
+if (chrome.tabs && chrome.tabs.onCreated) {
+  chrome.tabs.onCreated.addListener((tab) => {
+    const targetUrl = tab.pendingUrl || tab.url;
+    if (!targetUrl || !targetUrl.includes('fishyspop.github.io')) return;
+    const sessionMatch = targetUrl.match(/[?#&](?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
+    if (sessionMatch && sessionMatch[1]) {
+      handleGatewayJoinSession(sessionMatch[1].toUpperCase(), tab.id);
+    }
+  });
+}
+
+if (chrome.tabs && chrome.tabs.onUpdated) {
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    const targetUrl = changeInfo.url || (changeInfo.status === 'loading' ? tab.url : null);
+    if (!targetUrl) return;
+
+    const roomId = parseSessionInput(targetUrl);
+    if (!roomId) return;
+
+    if (targetUrl.includes('fishyspop.github.io')) {
+      handleGatewayJoinSession(roomId, tabId);
+      return;
+    }
+
+    if (targetUrl.includes('music.youtube.com')) {
+      const isSelfHost = (activeSessionRole === 'HOST' && activeSessionRoomId === roomId);
+      const isAlreadyListening = (activeSessionRole === 'LISTENER' && activeSessionRoomId === roomId);
+
+      chrome.tabs.query({ url: "*://music.youtube.com/*" }, (allTabs) => {
+        if (chrome.runtime.lastError || !allTabs) return;
+
+        const otherTabs = allTabs.filter(t => t.id !== tabId);
+        if (otherTabs.length > 0) {
+          const existingTab = otherTabs.find(t => t.active) || otherTabs[0];
+          chrome.tabs.update(existingTab.id, { active: true }, () => {
+            if (existingTab.windowId) {
+              chrome.windows.update(existingTab.windowId, { focused: true }).catch(() => {});
+            }
+            if (isSelfHost) {
+              chrome.tabs.sendMessage(existingTab.id, {
+                type: 'SHOW_TOAST',
+                message: `You are already hosting session ${roomId}`
+              }, () => { if (chrome.runtime.lastError) {} });
+            } else if (isAlreadyListening) {
+              chrome.tabs.sendMessage(existingTab.id, {
+                type: 'SHOW_TOAST',
+                message: `Already connected to session ${roomId}`
+              }, () => { if (chrome.runtime.lastError) {} });
+            } else {
+              chrome.tabs.sendMessage(existingTab.id, { type: 'JOIN_LISTEN_SESSION', roomId: roomId }, () => {
+                if (chrome.runtime.lastError) {}
+              });
+            }
+            chrome.tabs.remove(tabId).catch(() => {});
+          });
+        } else if (!isSelfHost && !isAlreadyListening) {
+          chrome.storage.local.set({ __ytm_pending_session: roomId });
+        }
+      });
+    }
+  });
+}
 
 function reInjectContentScripts() {
   chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {

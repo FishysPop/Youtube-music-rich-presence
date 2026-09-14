@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Music · Listen Together</title>
+  
+  <meta name="description" content="Synchronize your YouTube Music listening sessions with friends in real-time and display your current track on Discord with YouTube Music Rich Presence.">
+  <meta name="keywords" content="YouTube Music, Discord Rich Presence, Discord RPC, Listen Together, Listen Along, Music Sync, Chrome Extension">
+  <meta name="author" content="FishysPop">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#090a0b">
+  <link rel="canonical" href="https://fishyspop.github.io/Youtube-music-rich-presence/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="YouTube Music Rich Presence">
+  <meta property="og:title" content="YouTube Music · Listen Together">
+  <meta property="og:description" content="Synchronize your YouTube Music listening sessions with friends in real-time and display your current track on Discord.">
+  <meta property="og:url" content="https://fishyspop.github.io/Youtube-music-rich-presence/">
+  <meta property="og:image" content="https://i.imgur.com/3Bjhcwu.png">
+  <meta property="og:image:alt" content="YouTube Music Rich Presence on Discord">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="YouTube Music · Listen Together">
+  <meta name="twitter:description" content="Synchronize your YouTube Music listening sessions with friends in real-time and display your current track on Discord.">
+  <meta name="twitter:image" content="https://i.imgur.com/3Bjhcwu.png">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "YouTube Music Rich Presence",
+    "operatingSystem": "Windows, macOS, Linux",
+    "applicationCategory": "MultimediaApplication",
+    "description": "Displays your current YouTube Music activity on Discord and enables real-time Listen Together synchronized listening sessions.",
+    "url": "https://fishyspop.github.io/Youtube-music-rich-presence/",
+    "downloadUrl": "https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb",
+    "author": {
+      "@type": "Person",
+      "name": "FishysPop",
+      "url": "https://github.com/FishysPop"
+    }
+  }
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090a0b;
+      --surface: #111215;
+      --surface-subtle: #17191d;
+      --border: #23262d;
+      --border-focus: #3e424d;
+      --text: #ededef;
+      --text-muted: #8b8f9a;
+      --text-dim: #555964;
+      --accent: #ffffff;
+      --accent-text: #090a0b;
+      --status-neutral: #555964;
+      --status-warn: #e06c75;
+      --status-ok: #98c379;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 20px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 440px;
+      margin: auto;
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+
+    .brand-mark {
+      width: 14px;
+      height: 14px;
+      background: #ff0033;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .brand-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 32px 28px;
+      text-align: left;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--status-neutral);
+      transition: background 0.2s ease;
+    }
+
+    .room-tag {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 8px;
+      letter-spacing: 0.05em;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.3;
+      margin-bottom: 10px;
+      color: var(--text);
+    }
+
+    .description {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text-muted);
+      margin-bottom: 28px;
+    }
+
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      height: 44px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+      outline: none;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--accent-text);
+      border: 1px solid var(--accent);
+    }
+
+    .btn-primary:hover {
+      background: #e4e4e7;
+      border-color: #e4e4e7;
+    }
+
+    .btn-primary:active {
+      transform: scale(0.99);
+    }
+
+    .btn-secondary {
+      background: var(--surface-subtle);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: #1e2025;
+      border-color: var(--border-focus);
+    }
+
+    .btn-secondary:active {
+      transform: scale(0.99);
+    }
+
+    .footer {
+      margin-top: 24px;
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .footer a {
+      color: var(--text-dim);
+      text-decoration: none;
+      transition: color 0.15s ease;
+    }
+
+    .footer a:hover {
+      color: var(--text-muted);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        transition: none !important;
+        animation: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="brand-row">
+      <div class="brand-mark"></div>
+      <span class="brand-label">YouTube Music · Rich Presence</span>
+    </div>
+
+    <div class="card">
+      <div class="status-row">
+        <div class="status-indicator">
+          <div class="status-dot" id="statusDot"></div>
+          <span id="statusLabel">Checking installation</span>
+        </div>
+        <div class="room-tag" id="roomTag" style="display: none;"></div>
+      </div>
+
+      <h1 id="titleText">Listen Together</h1>
+      <p class="description" id="descText">Synchronize music playback in real-time with your friend.</p>
+
+      <div id="manualJoinRow" style="display: none; gap: 8px; margin: 16px 0 16px 0;">
+        <input type="text" id="manualJoinInput" placeholder="Enter room code or link..." style="flex: 1; min-width: 0; padding: 10px 12px; background: var(--surface-subtle); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; outline: none; font-family: inherit;">
+        <button id="manualJoinBtn" class="btn btn-primary" style="padding: 0 16px; height: 38px; font-size: 13px; flex-shrink: 0;">Join</button>
+      </div>
+
+      <div class="actions">
+        <a id="primaryBtn" href="https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb" class="btn btn-primary">
+          Add to Chrome
+        </a>
+
+        <a id="secondaryBtn" href="https://music.youtube.com/" class="btn btn-secondary">
+          Open YouTube Music
+        </a>
+      </div>
+    </div>
+
+    <div class="footer">
+      <a href="https://github.com/FishysPop/Youtube-music-rich-presence" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb" target="_blank" rel="noopener">Chrome Web Store</a>
+    </div>
+  </div>
+
+  <script>
+    const EXTENSION_ID = 'nnkdglgpmblpcmnojjekboafalidkmkb';
+    const STORE_URL = 'https://chromewebstore.google.com/detail/youtube-music-rich-presen/nnkdglgpmblpcmnojjekboafalidkmkb';
+
+    function parseSessionInput(rawInput) {
+      if (!rawInput || typeof rawInput !== 'string') return null;
+      const input = rawInput.trim();
+      if (!input) return null;
+
+      if (/^https?:\/\//i.test(input) || input.includes('://')) {
+        try {
+          const u = new URL(input);
+          const q = u.searchParams.get('ytm-session') || u.searchParams.get('session');
+          if (q && /^[a-zA-Z0-9_-]+$/.test(q)) return q.toUpperCase();
+
+          const h = u.hash || '';
+          const m = h.match(/(?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
+          if (m && m[1]) return m[1].toUpperCase();
+        } catch (e) {}
+      }
+
+      const paramMatch = input.match(/(?:[?#&]|^)(?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
+      if (paramMatch && paramMatch[1]) {
+        return paramMatch[1].toUpperCase();
+      }
+
+      const ytmMatch = input.match(/\b(YTM-[a-zA-Z0-9_-]+)\b/i);
+      if (ytmMatch && ytmMatch[1]) {
+        return ytmMatch[1].toUpperCase();
+      }
+
+      if (/^[a-zA-Z0-9]{6}$/.test(input)) {
+        return `YTM-${input.toUpperCase()}`;
+      }
+
+      if (/^[a-zA-Z0-9_-]{3,32}$/.test(input)) {
+        return input.toUpperCase();
+      }
+
+      return null;
+    }
+
+    let roomId = parseSessionInput(window.location.href);
+    const roomTag = document.getElementById('roomTag');
+    const secondaryBtn = document.getElementById('secondaryBtn');
+    const manualJoinRow = document.getElementById('manualJoinRow');
+    const manualJoinInput = document.getElementById('manualJoinInput');
+    const manualJoinBtn = document.getElementById('manualJoinBtn');
+
+    function applyRoomId(id) {
+      roomId = id;
+      if (roomId) {
+        roomTag.style.display = 'inline-block';
+        roomTag.textContent = roomId;
+        secondaryBtn.href = `https://music.youtube.com/?ytm-session=${roomId}`;
+        manualJoinRow.style.display = 'none';
+      } else {
+        manualJoinRow.style.display = 'flex';
+      }
+    }
+
+    applyRoomId(roomId);
+
+    const statusDot = document.getElementById('statusDot');
+    const statusLabel = document.getElementById('statusLabel');
+    const titleText = document.getElementById('titleText');
+    const descText = document.getElementById('descText');
+    const primaryBtn = document.getElementById('primaryBtn');
+
+    function markNotInstalled() {
+      statusDot.style.background = 'var(--status-warn)';
+      statusLabel.textContent = 'Extension required';
+      titleText.textContent = 'Install Extension';
+      descText.textContent = 'The YouTube Music Rich Presence extension is required to synchronize playback with your friend.';
+      primaryBtn.textContent = 'Add to Chrome';
+      primaryBtn.href = STORE_URL;
+    }
+
+    function markInstalled() {
+      statusDot.style.background = 'var(--status-ok)';
+      statusLabel.textContent = 'Extension active';
+      titleText.textContent = 'Connecting to YouTube Music';
+      descText.textContent = 'Opening your listening session in YouTube Music...';
+      primaryBtn.textContent = 'Open YouTube Music';
+      const targetUrl = roomId ? `https://music.youtube.com/?ytm-session=${roomId}` : 'https://music.youtube.com/';
+      primaryBtn.href = targetUrl;
+      window.location.replace(targetUrl);
+    }
+
+    let checked = false;
+
+    function triggerExtensionJoin(targetId) {
+      if (window.chrome && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
+        try {
+          chrome.runtime.sendMessage(
+            EXTENSION_ID,
+            { type: 'GATEWAY_JOIN_SESSION', roomId: targetId },
+            (res) => {
+              if (chrome.runtime.lastError || !res || !res.success) {
+                if (!checked) {
+                  checked = true;
+                  markNotInstalled();
+                }
+              } else {
+                checked = true;
+                markInstalled();
+              }
+            }
+          );
+        } catch (e) {
+          markNotInstalled();
+        }
+      } else {
+        markNotInstalled();
+      }
+    }
+
+    if (roomId) {
+      triggerExtensionJoin(roomId);
+    } else {
+      markNotInstalled();
+      titleText.textContent = 'Listen Together';
+      descText.textContent = 'Synchronize music playback in real-time with your friend.';
+    }
+
+    function handleManualJoin() {
+      const parsed = parseSessionInput(manualJoinInput.value);
+      if (!parsed) return;
+      applyRoomId(parsed);
+      triggerExtensionJoin(parsed);
+    }
+
+    if (manualJoinBtn && manualJoinInput) {
+      manualJoinBtn.onclick = handleManualJoin;
+      manualJoinInput.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handleManualJoin();
+        }
+      };
+    }
+
+    setTimeout(() => {
+      if (!checked) {
+        checked = true;
+        markNotInstalled();
+      }
+    }, 450);
+  </script>
+</body>
+</html>

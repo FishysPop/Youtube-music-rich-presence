@@ -366,10 +366,20 @@ class WebRtcSyncEngine {
     }
 
     joinRoom(roomId) {
+        const normalized = roomId ? roomId.trim().toUpperCase() : '';
+        if (this.isHost && this.roomId === normalized) {
+            console.warn(`[WebRTC Sync] Cannot join room ${normalized}: Already hosting this room.`);
+            return this.roomId;
+        }
+        if (this.role === 'LISTENER' && this.roomId === normalized && this.signalingSocket) {
+            console.log(`[WebRTC Sync] Already joined room: ${normalized}`);
+            return this.roomId;
+        }
         this.cleanup();
         this.isHost = false;
         this.role = 'LISTENER';
         this.roomId = roomId.trim().toUpperCase();
+        this.roomId = normalized;
         console.log(`[WebRTC Sync] Joining room: ${this.roomId} (peerId: ${this.peerId})`);
         this.connectSignaling();
         this.startLivenessCheck();

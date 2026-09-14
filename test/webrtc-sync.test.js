@@ -373,6 +373,46 @@ test('WebRtcSyncEngine: joinRoom sets LISTENER role', () => {
     engine.leaveRoom();
 });
 
+test('WebRtcSyncEngine: joinRoom ignores self-join if already hosting the same room', () => {
+    const engine = new WebRtcSyncEngine({});
+    const hostedRoomId = engine.createRoom('YTM-HOST99');
+
+    assert.strictEqual(engine.isHost, true);
+    assert.strictEqual(engine.role, 'HOST');
+    assert.strictEqual(engine.roomId, 'YTM-HOST99');
+
+    const result = engine.joinRoom('YTM-HOST99');
+    assert.strictEqual(result, 'YTM-HOST99');
+    assert.strictEqual(engine.isHost, true);
+    assert.strictEqual(engine.role, 'HOST');
+    assert.strictEqual(engine.roomId, 'YTM-HOST99');
+
+    engine.leaveRoom();
+});
+
+test('WebRtcSyncEngine: joinRoom ignores redundant join if already listening to the same room', () => {
+    const engine = new WebRtcSyncEngine({});
+    engine.joinRoom('YTM-LISTEN1');
+
+    assert.strictEqual(engine.isHost, false);
+    assert.strictEqual(engine.role, 'LISTENER');
+    assert.strictEqual(engine.roomId, 'YTM-LISTEN1');
+
+    let cleanupCalled = false;
+    const origCleanup = engine.cleanup.bind(engine);
+    engine.cleanup = () => {
+        cleanupCalled = true;
+        origCleanup();
+    };
+
+    const result = engine.joinRoom('YTM-LISTEN1');
+    assert.strictEqual(result, 'YTM-LISTEN1');
+    assert.strictEqual(cleanupCalled, false);
+    assert.strictEqual(engine.role, 'LISTENER');
+
+    engine.leaveRoom();
+});
+
 // 7. Extended Sanitization & Protocol Field Tests
 test('sanitizePacket allows packets with null or undefined videoId without dropping the packet', () => {
     const packetWithoutVideoId = {

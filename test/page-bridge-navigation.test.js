@@ -26,23 +26,30 @@ async function runAllTests() {
   }
 }
 
-function buildWatchEndpoint(videoId, currentTime, playlistId, playlistIndex) {
+function buildWatchEndpoint(videoId, currentTime) {
   const seconds = Math.floor(currentTime || 0);
   const endpoint = {
     watchEndpoint: {
-      videoId: videoId
+      videoId: videoId,
+      watchEndpointMusicSupportedConfigs: {
+        watchEndpointMusicConfig: {
+          musicVideoType: "MUSIC_VIDEO_TYPE_OMV"
+        }
+      }
     }
   };
   if (seconds > 0) {
     endpoint.watchEndpoint.startTimeSeconds = seconds;
   }
-  if (playlistId && typeof playlistId === 'string') {
-    endpoint.watchEndpoint.playlistId = playlistId;
-  }
-  if (typeof playlistIndex === 'number' && Number.isInteger(playlistIndex) && playlistIndex >= 0) {
-    endpoint.watchEndpoint.index = playlistIndex;
-  }
   return endpoint;
+}
+
+function buildWatchUrl(videoId, currentTime) {
+  const startSec = Math.floor(currentTime || 0);
+  const searchParams = new URLSearchParams();
+  searchParams.set('v', videoId);
+  if (startSec > 0) searchParams.set('t', startSec);
+  return `/watch?${searchParams.toString()}`;
 }
 
 function shouldCollapsePlayerPage(wasPlayerPageOpen, currentPath) {
@@ -51,7 +58,7 @@ function shouldCollapsePlayerPage(wasPlayerPageOpen, currentPath) {
   return true;
 }
 
-function buildLoadVideoMessage(videoId, trackTitle, artist, albumArtUrl, currentTime, isPlaying, playlistId, playlistIndex, nextVideoId) {
+function buildLoadVideoMessage(videoId, trackTitle, artist, albumArtUrl, currentTime, isPlaying, playlistId, playlistIndex, nextVideoId, forceWatchNavigation) {
   const msg = {
     source: 'ytm-sync-isolated',
     action: 'LOAD_VIDEO',
@@ -62,6 +69,9 @@ function buildLoadVideoMessage(videoId, trackTitle, artist, albumArtUrl, current
     currentTime: typeof currentTime === 'number' ? currentTime : 0,
     isPlaying: typeof isPlaying === 'boolean' ? isPlaying : true
   };
+  if (typeof forceWatchNavigation === 'boolean') {
+    msg.forceWatchNavigation = forceWatchNavigation;
+  }
   if (playlistId && typeof playlistId === 'string') {
     msg.playlistId = playlistId;
   }
@@ -77,6 +87,7 @@ function buildLoadVideoMessage(videoId, trackTitle, artist, albumArtUrl, current
 function determineSkipStrategy({ targetVideoId, currentIdx, queueItems }) {
   if (!targetVideoId) return 'none';
   if (!Array.isArray(queueItems) || queueItems.length === 0) return 'endpoint_navigation';
+  if (!Array.isArray(queueItems) || queueItems.length === 0) return 'user_navigation';
 
   const nextItem = currentIdx >= 0 && currentIdx + 1 < queueItems.length ? queueItems[currentIdx + 1] : null;
   if (nextItem && nextItem.videoId === targetVideoId) {
@@ -94,6 +105,7 @@ function determineSkipStrategy({ targetVideoId, currentIdx, queueItems }) {
   }
 
   return 'endpoint_navigation';
+  return 'user_navigation';
 }
 
 function executeTieredNavigation(app, watchEndpoint, windowObj) {
@@ -127,6 +139,8 @@ function executeTieredNavigation(app, watchEndpoint, windowObj) {
     } catch (e) {}
   }
 
+function executeNavigation(targetVid, targetTime, windowObj) {
+  const targetUrl = buildWatchUrl(targetVid, targetTime);
   if (windowObj && windowObj.location && typeof windowObj.location.assign === 'function') {
     const searchParams = new URLSearchParams();
     searchParams.set('v', watchEndpoint.videoId);
@@ -138,13 +152,31 @@ function executeTieredNavigation(app, watchEndpoint, windowObj) {
     }
     windowObj.location.assign(`/watch?${searchParams.toString()}`);
     return 'location.assign';
+    windowObj.location.assign(targetUrl);
+    return targetUrl;
   }
 
   return 'none';
+  return targetUrl;
 }
 
-function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, playlistId, playlistIndex, queueItems, currentQueueIdx, nextBtn, prevBtn, player, app, windowObj, store }) {
-  if (currentVid === videoId) {
+function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, playlistId, playlistIndex, queueItems, currentQueueIdx, nextBtn, prevBtn, player, app, windowObj, store, isOnWatch = true, hasActivePlayer = true, forceWatchNavigation = false }) {
+  if (isOnWatch && hasActivePlayer && !forceWatchNavigation && currentVid === videoId) {
+function handleBridgeLoadVideo({
+  currentVid,
+  videoId,
+  currentTime,
+  isPlaying,
+  queueItems,
+  currentQueueIdx,
+  nextBtn,
+  prevBtn,
+  player,
+  windowObj,
+  isOnWatch = true,
+  hasActivePlayer = true
+}) {
+  if (isOnWatch && hasActivePlayer && currentVid === videoId) {
     if (typeof currentTime === 'number' && player && typeof player.seekTo === 'function') {
       player.seekTo(currentTime, true);
     }
@@ -159,16 +191,24 @@ function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, pl
   const items = Array.isArray(queueItems) ? queueItems : [];
   const curIdx = typeof currentQueueIdx === 'number' ? currentQueueIdx : -1;
 
-  if (!currentVid || curIdx === -1) {
+  if (!isOnWatch || !hasActivePlayer || !currentVid || curIdx === -1 || forceWatchNavigation) {
     const watchEndpoint = buildWatchEndpoint(videoId, currentTime, playlistId, playlistIndex).watchEndpoint;
     const navMethod = executeTieredNavigation(app, watchEndpoint, windowObj);
     return { actionTaken: 'navigated_empty_state', navMethod, watchEndpoint };
+  if (!isOnWatch || !hasActivePlayer || !currentVid || curIdx === -1) {
+    const targetUrl = executeNavigation(videoId, currentTime, windowObj);
+    return { actionTaken: 'navigated_empty_state', targetUrl };
   }
 
   const nextItem = curIdx !== -1 && curIdx + 1 < items.length ? items[curIdx + 1] : null;
   if (nextItem && nextItem.videoId === videoId) {
     if (nextBtn && typeof nextBtn.click === 'function') {
+    if (nextBtn && typeof nextBtn.click === 'function' && !nextBtn.disabled) {
       nextBtn.click();
+      return { actionTaken: 'native_next' };
+    }
+    if (player && typeof player.nextVideo === 'function') {
+      player.nextVideo();
       return { actionTaken: 'native_next' };
     }
   }
@@ -176,6 +216,7 @@ function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, pl
   const prevItem = curIdx > 0 && curIdx - 1 < items.length ? items[curIdx - 1] : null;
   if (prevItem && prevItem.videoId === videoId) {
     if (prevBtn && typeof prevBtn.click === 'function') {
+    if (prevBtn && typeof prevBtn.click === 'function' && !prevBtn.disabled) {
       prevBtn.click();
       return { actionTaken: 'native_prev' };
     }
@@ -187,6 +228,9 @@ function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, pl
     if (matching) {
       arguments[0].queueObj.selectQueueItem(matching);
       return { actionTaken: 'queue_select_item' };
+    if (player && typeof player.previousVideo === 'function') {
+      player.previousVideo();
+      return { actionTaken: 'native_prev' };
     }
   }
 
@@ -207,24 +251,50 @@ function handleBridgeLoadVideo({ currentVid, videoId, currentTime, isPlaying, pl
     }
   }
 
-  const watchEndpoint = buildWatchEndpoint(videoId, currentTime, playlistId, playlistIndex).watchEndpoint;
+  const watchEndpoint = buildWatchEndpoint(videoId, currentTime).watchEndpoint;
   const navMethod = executeTieredNavigation(app, watchEndpoint, windowObj);
 
   return { actionTaken: 'navigated', navMethod, watchEndpoint };
+  const targetUrl = executeNavigation(videoId, currentTime, windowObj);
+  return { actionTaken: 'navigated', targetUrl };
 }
 
-test('buildWatchEndpoint creates valid watchEndpoint with videoId', () => {
+test('buildWatchEndpoint creates valid watchEndpoint with videoId and never includes playlistId', () => {
   const ep = buildWatchEndpoint('kJQP7kiw5Fk', 0);
-  assert.deepStrictEqual(ep, {
-    watchEndpoint: { videoId: 'kJQP7kiw5Fk' }
-  });
+  assert.strictEqual(ep.watchEndpoint.videoId, 'kJQP7kiw5Fk');
+  assert.strictEqual(ep.watchEndpoint.playlistId, undefined);
+  assert.strictEqual('playlistId' in ep.watchEndpoint, false);
+  assert.strictEqual(ep.watchEndpoint.watchEndpointMusicSupportedConfigs.watchEndpointMusicConfig.musicVideoType, 'MUSIC_VIDEO_TYPE_OMV');
 });
 
-test('buildWatchEndpoint includes startTimeSeconds when currentTime > 0', () => {
+test('buildWatchEndpoint includes startTimeSeconds when currentTime > 0 without playlist parameter', () => {
   const ep = buildWatchEndpoint('kJQP7kiw5Fk', 45.7);
-  assert.deepStrictEqual(ep, {
-    watchEndpoint: { videoId: 'kJQP7kiw5Fk', startTimeSeconds: 45 }
-  });
+  assert.strictEqual(ep.watchEndpoint.videoId, 'kJQP7kiw5Fk');
+  assert.strictEqual(ep.watchEndpoint.startTimeSeconds, 45);
+  assert.strictEqual(ep.watchEndpoint.playlistId, undefined);
+});
+
+test('buildWatchUrl creates standard watch URL with videoId and start time but never includes list parameter', () => {
+  const url = buildWatchUrl('eZXKCiUMRlc', 25);
+  assert.strictEqual(url, '/watch?v=eZXKCiUMRlc&t=25');
+  assert.strictEqual(url.includes('list='), false);
+
+  const pureUrl = buildWatchUrl('eZXKCiUMRlc', 0);
+  assert.strictEqual(pureUrl, '/watch?v=eZXKCiUMRlc');
+  assert.strictEqual(pureUrl.includes('list='), false);
+});
+
+test('executeNavigation performs normal window.location.assign without playlist parameters', () => {
+  let assignedUrl = null;
+  const mockWindow = {
+    location: {
+      assign: (u) => { assignedUrl = u; }
+    }
+  };
+  const res = executeNavigation('kJQP7kiw5Fk', 15.5, mockWindow);
+  assert.strictEqual(res, '/watch?v=kJQP7kiw5Fk&t=15');
+  assert.strictEqual(assignedUrl, '/watch?v=kJQP7kiw5Fk&t=15');
+  assert.strictEqual(assignedUrl.includes('list='), false);
 });
 
 test('shouldCollapsePlayerPage returns true when user is on browse page and player page was closed', () => {
@@ -246,8 +316,9 @@ test('shouldCollapsePlayerPage returns false when user is already on watch page'
   assert.strictEqual(watchResult, false);
 });
 
-function shouldTriggerRemoteTrackChange(packetVideoId, currentVid, lastSyncedVideoId) {
+function shouldTriggerRemoteTrackChange(packetVideoId, currentVid, lastSyncedVideoId, isOnWatch = true, hasActivePlayer = true) {
   if (!packetVideoId) return false;
+  if (!isOnWatch || !hasActivePlayer) return true;
   return packetVideoId !== lastSyncedVideoId || (!!currentVid && packetVideoId !== currentVid);
 }
 
@@ -283,6 +354,14 @@ test('buildLoadVideoMessage provides safe defaults for missing currentTime and i
   assert.strictEqual(msg.isPlaying, true);
 });
 
+test('buildLoadVideoMessage passes forceWatchNavigation flag when specified', () => {
+  const msgTrue = buildLoadVideoMessage('kJQP7kiw5Fk', 'Track', 'Artist', null, 0, true, null, null, null, true);
+  assert.strictEqual(msgTrue.forceWatchNavigation, true);
+
+  const msgFalse = buildLoadVideoMessage('kJQP7kiw5Fk', 'Track', 'Artist', null, 0, true, null, null, null, false);
+  assert.strictEqual(msgFalse.forceWatchNavigation, false);
+});
+
 test('shouldTriggerRemoteTrackChange correctly triggers when currentVid or lastSyncedVideoId differs', () => {
   // New video incoming
   assert.strictEqual(shouldTriggerRemoteTrackChange('vid22222222', 'vid11111111', 'vid11111111'), true);
@@ -295,6 +374,14 @@ test('shouldTriggerRemoteTrackChange correctly triggers when currentVid or lastS
 
   // Missing packet video ID cannot trigger
   assert.strictEqual(shouldTriggerRemoteTrackChange(null, 'vid11111111', 'vid11111111'), false);
+});
+
+test('shouldTriggerRemoteTrackChange triggers navigation if isOnWatch is false even if lastSyncedVideoId matches', () => {
+  assert.strictEqual(shouldTriggerRemoteTrackChange('vid11111111', 'vid11111111', 'vid11111111', false, true), true);
+});
+
+test('shouldTriggerRemoteTrackChange triggers navigation if hasActivePlayer is false even if lastSyncedVideoId matches', () => {
+  assert.strictEqual(shouldTriggerRemoteTrackChange('vid11111111', 'vid11111111', 'vid11111111', true, false), true);
 });
 
 test('isHostTrackChangeDetected detects changes by videoId even when title and artist match', () => {
@@ -324,15 +411,12 @@ test('shouldPreserveListenerSessionDuringRemoteNavigation protects listener from
   assert.strictEqual(shouldPreserveListenerSessionDuringRemoteNavigation(false, null, 8000), false);
 });
 
-test('buildWatchEndpoint includes playlistId when provided', () => {
-  const ep = buildWatchEndpoint('kJQP7kiw5Fk', 12, 'RDAMVMkJQP7kiw5Fk');
-  assert.deepStrictEqual(ep, {
-    watchEndpoint: {
-      videoId: 'kJQP7kiw5Fk',
-      startTimeSeconds: 12,
-      playlistId: 'RDAMVMkJQP7kiw5Fk'
-    }
-  });
+test('buildWatchEndpoint never includes playlistId', () => {
+  const ep = buildWatchEndpoint('kJQP7kiw5Fk', 12);
+  assert.strictEqual(ep.watchEndpoint.videoId, 'kJQP7kiw5Fk');
+  assert.strictEqual(ep.watchEndpoint.startTimeSeconds, 12);
+  assert.strictEqual(ep.watchEndpoint.playlistId, undefined);
+  assert.strictEqual('playlistId' in ep.watchEndpoint, false);
 });
 
 test('buildLoadVideoMessage includes playlistId when provided', () => {
@@ -417,6 +501,7 @@ test('handleBridgeLoadVideo performs in-place seek without navigation if video i
     isPlaying: true,
     player,
     app
+    player
   });
 
   assert.strictEqual(res.actionTaken, 'same_video_in_place');
@@ -429,6 +514,10 @@ test('handleBridgeLoadVideo triggers SPA navigation when a new videoId is receiv
   let navPayload = null;
   const app = {
     handleNavigationEndpoint: (p) => { navPayload = p; }
+test('handleBridgeLoadVideo triggers standard user navigation when a new videoId is received and not in queue', () => {
+  let assignedUrl = null;
+  const mockWindow = {
+    location: { assign: (u) => { assignedUrl = u; } }
   };
 
   const res = handleBridgeLoadVideo({
@@ -436,32 +525,20 @@ test('handleBridgeLoadVideo triggers SPA navigation when a new videoId is receiv
     videoId: 'newVideo2222',
     currentTime: 5,
     isPlaying: true,
-    playlistId: 'RDmix123',
     queueItems: [{ videoId: 'oldVideo1111' }],
     currentQueueIdx: 0,
     app
+    windowObj: mockWindow
   });
 
   assert.strictEqual(res.actionTaken, 'navigated');
   assert.strictEqual(res.navMethod, 'handleNavigationEndpoint');
-  assert.deepStrictEqual(navPayload, {
-    watchEndpoint: {
-      videoId: 'newVideo2222',
-      startTimeSeconds: 5,
-      playlistId: 'RDmix123'
-    }
-  });
-});
-
-test('buildWatchEndpoint includes playlistIndex when valid integer >= 0', () => {
-  const ep = buildWatchEndpoint('kJQP7kiw5Fk', 0, 'PL12345', 4);
-  assert.strictEqual(ep.watchEndpoint.index, 4);
-
-  const epNoIndex = buildWatchEndpoint('kJQP7kiw5Fk', 0, 'PL12345', null);
-  assert.strictEqual(epNoIndex.watchEndpoint.index, undefined);
-
-  const epNegIndex = buildWatchEndpoint('kJQP7kiw5Fk', 0, 'PL12345', -1);
-  assert.strictEqual(epNegIndex.watchEndpoint.index, undefined);
+  assert.strictEqual(navPayload.watchEndpoint.videoId, 'newVideo2222');
+  assert.strictEqual(navPayload.watchEndpoint.startTimeSeconds, 5);
+  assert.strictEqual(navPayload.watchEndpoint.playlistId, undefined);
+  assert.strictEqual('playlistId' in navPayload.watchEndpoint, false);
+  assert.strictEqual(assignedUrl, '/watch?v=newVideo2222&t=5');
+  assert.strictEqual(assignedUrl.includes('list='), false);
 });
 
 test('buildLoadVideoMessage includes playlistIndex and nextVideoId when provided', () => {
@@ -515,6 +592,7 @@ test('determineSkipStrategy selects queue_jump when target is elsewhere in queue
 });
 
 test('determineSkipStrategy falls back to endpoint_navigation when target is not in queue', () => {
+test('determineSkipStrategy falls back to user_navigation when target is not in queue', () => {
   const queueItems = [
     { videoId: 'vid0' },
     { videoId: 'vid1' }
@@ -525,6 +603,7 @@ test('determineSkipStrategy falls back to endpoint_navigation when target is not
     queueItems
   });
   assert.strictEqual(strat, 'endpoint_navigation');
+  assert.strictEqual(strat, 'user_navigation');
 
   const emptyStrat = determineSkipStrategy({
     targetVideoId: 'vidUnqueued',
@@ -532,11 +611,13 @@ test('determineSkipStrategy falls back to endpoint_navigation when target is not
     queueItems: []
   });
   assert.strictEqual(emptyStrat, 'endpoint_navigation');
+  assert.strictEqual(emptyStrat, 'user_navigation');
 });
 
 test('handleBridgeLoadVideo clicks native next button when target is next track', () => {
   let nextClicked = false;
   const nextBtn = { click: () => { nextClicked = true; } };
+  const nextBtn = { click: () => { nextClicked = true; }, disabled: false };
   const queueItems = [{ videoId: 'vid1' }, { videoId: 'vid2' }];
 
   const res = handleBridgeLoadVideo({
@@ -554,6 +635,7 @@ test('handleBridgeLoadVideo clicks native next button when target is next track'
 test('handleBridgeLoadVideo clicks native previous button when target is previous track', () => {
   let prevClicked = false;
   const prevBtn = { click: () => { prevClicked = true; } };
+  const prevBtn = { click: () => { prevClicked = true; }, disabled: false };
   const queueItems = [{ videoId: 'vid1' }, { videoId: 'vid2' }];
 
   const res = handleBridgeLoadVideo({
@@ -587,7 +669,7 @@ test('handleBridgeLoadVideo clicks in-queue item play button when target is else
   assert.strictEqual(playClicked, true);
 });
 
-test('handleBridgeLoadVideo navigates with playlistId and index when unqueued', () => {
+test('handleBridgeLoadVideo navigates without playlistId or index when unqueued', () => {
   let navPayload = null;
   const app = {
     handleNavigationEndpoint: (p) => { navPayload = p; }
@@ -596,27 +678,24 @@ test('handleBridgeLoadVideo navigates with playlistId and index when unqueued', 
   const res = handleBridgeLoadVideo({
     currentVid: 'vid0',
     videoId: 'vidUnqueued',
-    playlistId: 'PLmix999',
-    playlistIndex: 5,
     queueItems: [{ videoId: 'vid0' }],
     currentQueueIdx: 0,
     app
   });
 
   assert.strictEqual(res.actionTaken, 'navigated');
-  assert.deepStrictEqual(navPayload, {
-    watchEndpoint: {
-      videoId: 'vidUnqueued',
-      playlistId: 'PLmix999',
-      index: 5
-    }
-  });
+  assert.strictEqual(navPayload.watchEndpoint.videoId, 'vidUnqueued');
+  assert.strictEqual(navPayload.watchEndpoint.playlistId, undefined);
+  assert.strictEqual('playlistId' in navPayload.watchEndpoint, false);
 });
 
 test('handleBridgeLoadVideo navigates directly when player is stopped or queue is empty', () => {
   let navPayload = null;
   const app = {
     handleNavigationEndpoint: (p) => { navPayload = p; }
+  let assignedUrl = null;
+  const mockWindow = {
+    location: { assign: (u) => { assignedUrl = u; } }
   };
 
   const res = handleBridgeLoadVideo({
@@ -625,14 +704,97 @@ test('handleBridgeLoadVideo navigates directly when player is stopped or queue i
     queueItems: [],
     currentQueueIdx: -1,
     app
+    windowObj: mockWindow
   });
 
   assert.strictEqual(res.actionTaken, 'navigated_empty_state');
-  assert.deepStrictEqual(navPayload, {
-    watchEndpoint: {
-      videoId: 'vidFreshStart'
-    }
+  assert.strictEqual(navPayload.watchEndpoint.videoId, 'vidFreshStart');
+  assert.strictEqual(navPayload.watchEndpoint.playlistId, undefined);
+  assert.strictEqual(navPayload.watchEndpoint.watchEndpointMusicSupportedConfigs.watchEndpointMusicConfig.musicVideoType, 'MUSIC_VIDEO_TYPE_OMV');
+  assert.strictEqual(assignedUrl, '/watch?v=vidFreshStart');
+  assert.strictEqual(assignedUrl.includes('list='), false);
+});
+
+test('handleBridgeLoadVideo forces direct watch navigation when isOnWatch is false, ignoring queue and nextBtn', () => {
+  let nextClicked = false;
+  let navPayload = null;
+  const nextBtn = { click: () => { nextClicked = true; } };
+  const app = { handleNavigationEndpoint: (p) => { navPayload = p; } };
+  let assignedUrl = null;
+  const nextBtn = { click: () => { nextClicked = true; }, disabled: false };
+  const mockWindow = {
+    location: { assign: (u) => { assignedUrl = u; } }
+  };
+
+  const res = handleBridgeLoadVideo({
+    isOnWatch: false,
+    currentVid: 'vid11111111',
+    videoId: 'vid22222222',
+    queueItems: [{ videoId: 'vid11111111' }, { videoId: 'vid22222222' }],
+    currentQueueIdx: 0,
+    nextBtn,
+    app
+    windowObj: mockWindow
   });
+
+  assert.strictEqual(res.actionTaken, 'navigated_empty_state');
+  assert.strictEqual(nextClicked, false);
+  assert.strictEqual(navPayload.watchEndpoint.videoId, 'vid22222222');
+  assert.strictEqual(navPayload.watchEndpoint.playlistId, undefined);
+  assert.strictEqual(navPayload.watchEndpoint.watchEndpointMusicSupportedConfigs.watchEndpointMusicConfig.musicVideoType, 'MUSIC_VIDEO_TYPE_OMV');
+  assert.strictEqual(assignedUrl, '/watch?v=vid22222222');
+});
+
+test('handleBridgeLoadVideo forces direct watch navigation when hasActivePlayer is false', () => {
+  let nextClicked = false;
+  let navPayload = null;
+  const nextBtn = { click: () => { nextClicked = true; } };
+  const app = { handleNavigationEndpoint: (p) => { navPayload = p; } };
+  let assignedUrl = null;
+  const nextBtn = { click: () => { nextClicked = true; }, disabled: false };
+  const mockWindow = {
+    location: { assign: (u) => { assignedUrl = u; } }
+  };
+
+  const res = handleBridgeLoadVideo({
+    isOnWatch: true,
+    hasActivePlayer: false,
+    currentVid: 'vid11111111',
+    videoId: 'vid22222222',
+    queueItems: [{ videoId: 'vid11111111' }, { videoId: 'vid22222222' }],
+    currentQueueIdx: 0,
+    nextBtn,
+    app
+    windowObj: mockWindow
+  });
+
+  assert.strictEqual(res.actionTaken, 'navigated_empty_state');
+  assert.strictEqual(nextClicked, false);
+  assert.strictEqual(navPayload.watchEndpoint.videoId, 'vid22222222');
+  assert.strictEqual(assignedUrl, '/watch?v=vid22222222');
+});
+
+test('handleBridgeLoadVideo forces direct watch navigation when forceWatchNavigation is true', () => {
+  let nextClicked = false;
+  let navPayload = null;
+  const nextBtn = { click: () => { nextClicked = true; } };
+  const app = { handleNavigationEndpoint: (p) => { navPayload = p; } };
+
+  const res = handleBridgeLoadVideo({
+    isOnWatch: true,
+    hasActivePlayer: true,
+    forceWatchNavigation: true,
+    currentVid: 'vid11111111',
+    videoId: 'vid22222222',
+    queueItems: [{ videoId: 'vid11111111' }, { videoId: 'vid22222222' }],
+    currentQueueIdx: 0,
+    nextBtn,
+    app
+  });
+
+  assert.strictEqual(res.actionTaken, 'navigated_empty_state');
+  assert.strictEqual(nextClicked, false);
+  assert.strictEqual(navPayload.watchEndpoint.videoId, 'vid22222222');
 });
 
 function formatUpcomingTrackItem(track) {
@@ -976,6 +1138,192 @@ test('changeTrackViaQueue uses handleNavigationEndpoint without direct player by
 
   assert.strictEqual(result, 'native_nav_endpoint');
   assert.strictEqual(navEndpointCalled?.watchEndpoint?.videoId, 'targetVid111');
+});
+
+test('triggerNativeNext triggers nextBtn when target is at currentIdx + 1', () => {
+  let nextBtnClicked = false;
+  const mockPlayerBar = {
+    querySelector: (sel) => {
+      if (sel.includes('next-button')) {
+        return {
+          disabled: false,
+          hasAttribute: () => false,
+          click: () => { nextBtnClicked = true; }
+        };
+      }
+      return null;
+    }
+  };
+
+  function simulateNativeNext(playerBar) {
+    const nextBtn = playerBar?.querySelector('.next-button');
+    if (nextBtn && typeof nextBtn.click === 'function' && !nextBtn.disabled) {
+      nextBtn.click();
+      return true;
+    }
+    return false;
+  }
+
+  const res = simulateNativeNext(mockPlayerBar);
+  assert.strictEqual(res, true);
+  assert.strictEqual(nextBtnClicked, true);
+});
+
+test('triggerNativeNext moves track to currentIdx + 1 and clicks nextBtn', () => {
+  let dispatchedAction = null;
+  let nextBtnClicked = false;
+  const mockStore = {
+    dispatch: (action) => { dispatchedAction = action; }
+  };
+  const mockPlayerBar = {
+    querySelector: (sel) => {
+      if (sel.includes('next-button')) {
+        return {
+          disabled: false,
+          hasAttribute: () => false,
+          click: () => { nextBtnClicked = true; }
+        };
+      }
+      return null;
+    }
+  };
+
+  const queue = [
+    { playlistPanelVideoRenderer: { videoId: 'curr001' } },
+    { playlistPanelVideoRenderer: { videoId: 'next002' } },
+    { playlistPanelVideoRenderer: { videoId: 'target003' } }
+  ];
+
+  const curIdx = 0;
+  const matchingIdx = queue.findIndex(it => it.playlistPanelVideoRenderer.videoId === 'target003');
+
+  if (matchingIdx > curIdx + 1) {
+    mockStore.dispatch({
+      type: 'MOVE_ITEM',
+      payload: { fromIndex: matchingIdx, toIndex: curIdx + 1 }
+    });
+  }
+
+  const nextBtn = mockPlayerBar.querySelector('.next-button');
+  if (nextBtn && !nextBtn.disabled) nextBtn.click();
+
+  assert.deepStrictEqual(dispatchedAction, {
+    type: 'MOVE_ITEM',
+    payload: { fromIndex: 2, toIndex: 1 }
+  });
+  assert.strictEqual(nextBtnClicked, true);
+});
+
+test('triggerNativePrev triggers prevBtn when target is at currentIdx - 1', () => {
+  let prevBtnClicked = false;
+  const mockPlayerBar = {
+    querySelector: (sel) => {
+      if (sel.includes('previous-button')) {
+        return {
+          disabled: false,
+          hasAttribute: () => false,
+          click: () => { prevBtnClicked = true; }
+        };
+      }
+      return null;
+    }
+  };
+
+  function simulateNativePrev(playerBar) {
+    const prevBtn = playerBar?.querySelector('.previous-button');
+    if (prevBtn && typeof prevBtn.click === 'function' && !prevBtn.disabled) {
+      prevBtn.click();
+      return true;
+    }
+    return false;
+  }
+
+  const res = simulateNativePrev(mockPlayerBar);
+  assert.strictEqual(res, true);
+  assert.strictEqual(prevBtnClicked, true);
+});
+
+function ensurePlayerPageOpen(app, playerBar) {
+  if (app && typeof app.openPlayerPage === 'function') {
+    try {
+      app.openPlayerPage();
+      return 'app.openPlayerPage';
+    } catch (e) {}
+  }
+  if (playerBar) {
+    const expandBtn = (typeof playerBar.querySelector === 'function')
+      ? (playerBar.querySelector('#expand-button, .expand-button, [aria-label*="Open"], [aria-label*="Expand"]') ||
+         playerBar.querySelector('.middle-controls') ||
+         playerBar.querySelector('.thumbnail-image-wrapper'))
+      : null;
+    if (expandBtn && typeof expandBtn.click === 'function') {
+      try {
+        expandBtn.click();
+        return 'playerBar.expand';
+      } catch (e) {}
+    }
+  }
+  return 'none';
+}
+
+function resolveAppReadinessState(isDocComplete, hasApp, hasPlayerBar, hasPlayerOrVideo, elapsedMs) {
+  if (isDocComplete && hasApp && hasPlayerBar && hasPlayerOrVideo && elapsedMs >= 2000) {
+    return { ready: true, delayMs: 0 };
+  }
+  if (isDocComplete && hasApp && hasPlayerBar && hasPlayerOrVideo) {
+    return { ready: true, delayMs: 1000 };
+  }
+  if (elapsedMs >= 5000) {
+    return { ready: true, delayMs: 300 };
+  }
+  return { ready: false, delayMs: 150 };
+}
+
+test('ensurePlayerPageOpen calls app.openPlayerPage when available', () => {
+  let openCalled = false;
+  const mockApp = { openPlayerPage: () => { openCalled = true; } };
+  const res = ensurePlayerPageOpen(mockApp, null);
+  assert.strictEqual(res, 'app.openPlayerPage');
+  assert.strictEqual(openCalled, true);
+});
+
+test('ensurePlayerPageOpen clicks playerBar expand control when app.openPlayerPage not present', () => {
+  let clicked = false;
+  const mockPlayerBar = {
+    querySelector: (sel) => {
+      if (sel.includes('middle-controls')) {
+        return { click: () => { clicked = true; } };
+      }
+      return null;
+    }
+  };
+  const res = ensurePlayerPageOpen(null, mockPlayerBar);
+  assert.strictEqual(res, 'playerBar.expand');
+  assert.strictEqual(clicked, true);
+});
+
+test('resolveAppReadinessState returns immediate ready when page is complete, elements exist, and elapsed >= 2000ms', () => {
+  const res = resolveAppReadinessState(true, true, true, true, 2500);
+  assert.strictEqual(res.ready, true);
+  assert.strictEqual(res.delayMs, 0);
+});
+
+test('resolveAppReadinessState adds 1000ms stabilization delay for freshly loaded page to prevent premature navigation race conditions', () => {
+  const res = resolveAppReadinessState(true, true, true, true, 500);
+  assert.strictEqual(res.ready, true);
+  assert.strictEqual(res.delayMs, 1000);
+});
+
+test('resolveAppReadinessState returns not ready when document is incomplete or player elements missing before timeout', () => {
+  const res = resolveAppReadinessState(false, true, false, false, 800);
+  assert.strictEqual(res.ready, false);
+  assert.strictEqual(res.delayMs, 150);
+});
+
+test('resolveAppReadinessState recovers safely after 5000ms maximum timeout', () => {
+  const res = resolveAppReadinessState(false, false, false, false, 5500);
+  assert.strictEqual(res.ready, true);
+  assert.strictEqual(res.delayMs, 300);
 });
 
 runAllTests();
