@@ -161,6 +161,84 @@ test('resolveOutsideClickAction: keeps popover open when clicking the toggle but
   });
   assert.strictEqual(res.shouldClose, false);
 });
+function resolveGuidePageState(currentPage, action, totalPages = 2) {
+  if (action === 'next') {
+    return Math.min(totalPages, currentPage + 1);
+  }
+  if (action === 'back') {
+    return Math.max(1, currentPage - 1);
+  }
+  return currentPage;
+}
+
+test('resolveGuidePageState: correctly navigates between page 1 and page 2', () => {
+  let page = 1;
+  page = resolveGuidePageState(page, 'next', 2);
+  assert.strictEqual(page, 2);
+
+  page = resolveGuidePageState(page, 'next', 2);
+  assert.strictEqual(page, 2);
+
+  page = resolveGuidePageState(page, 'back', 2);
+  assert.strictEqual(page, 1);
+
+  page = resolveGuidePageState(page, 'back', 2);
+  assert.strictEqual(page, 1);
+});
+
+function formatHeaderMetaHtml({ showBadge = true, issuesUrl = 'https://github.com/FishysPop/Youtube-music-rich-presence/issues' } = {}) {
+  const badgeHtml = showBadge ? '<span class="beta-badge">BETA</span>' : '';
+  const issuesHtml = `<a href="${issuesUrl}" target="_blank" rel="noopener noreferrer">Issues?</a>`;
+  return { badgeHtml, issuesHtml };
+}
+
+test('formatHeaderMetaHtml: formats beta badge and valid issues hyperlink', () => {
+  const meta = formatHeaderMetaHtml();
+  assert(meta.badgeHtml.includes('BETA'));
+  assert(meta.issuesHtml.includes('Issues?'));
+  assert(meta.issuesHtml.includes('https://github.com/FishysPop/Youtube-music-rich-presence/issues'));
+  assert(meta.issuesHtml.includes('target="_blank"'));
+  assert(meta.issuesHtml.includes('rel="noopener noreferrer"'));
+});
+
+function resolveEmbeddedRightBadge({ isSessionActive, roleText }) {
+  if (!isSessionActive) {
+    return 'BETA';
+  }
+  return roleText;
+}
+
+test('resolveEmbeddedRightBadge: displays BETA when idle and roleText when hosting or listening', () => {
+  assert.strictEqual(resolveEmbeddedRightBadge({ isSessionActive: false }), 'BETA');
+  assert.strictEqual(resolveEmbeddedRightBadge({ isSessionActive: true, roleText: 'HOST' }), 'HOST');
+  assert.strictEqual(resolveEmbeddedRightBadge({ isSessionActive: true, roleText: 'LISTENER' }), 'LISTENER');
+});
+
+function resolvePopupBadge(state) {
+  if (!state || state.role === 'NONE' || !state.roomId) {
+    return { text: 'BETA', className: 'status-value beta' };
+  }
+  if (state.isHost) {
+    const count = state.peerCount || 0;
+    return {
+      text: count > 0 ? 'Hosting' : 'Waiting',
+      className: count > 0 ? 'status-value connected' : 'status-value pending'
+    };
+  }
+  const isConnected = state.status === 'connected' || (state.peerCount && state.peerCount > 0);
+  return {
+    text: isConnected ? 'Synced' : 'Connecting',
+    className: isConnected ? 'status-value connected' : 'status-value pending'
+  };
+}
+
+test('resolvePopupBadge: sets BETA badge when idle and session status when active', () => {
+  assert.deepStrictEqual(resolvePopupBadge(null), { text: 'BETA', className: 'status-value beta' });
+  assert.deepStrictEqual(resolvePopupBadge({ role: 'NONE' }), { text: 'BETA', className: 'status-value beta' });
+  assert.deepStrictEqual(resolvePopupBadge({ role: 'HOST', isHost: true, roomId: 'YTM-TEST1', peerCount: 0 }), { text: 'Waiting', className: 'status-value pending' });
+  assert.deepStrictEqual(resolvePopupBadge({ role: 'HOST', isHost: true, roomId: 'YTM-TEST1', peerCount: 2 }), { text: 'Hosting', className: 'status-value connected' });
+  assert.deepStrictEqual(resolvePopupBadge({ role: 'LISTENER', isHost: false, roomId: 'YTM-TEST1', status: 'connected' }), { text: 'Synced', className: 'status-value connected' });
+});
 
 async function runAllTests() {
   let passed = 0;

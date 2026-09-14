@@ -285,8 +285,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!listenSessionBadge || !listenIdleView || !listenActiveView) return;
 
     if (!state || state.role === 'NONE' || !state.roomId) {
-      listenSessionBadge.textContent = "Idle";
-      listenSessionBadge.className = "status-value disconnected";
+      listenSessionBadge.textContent = "BETA";
+      listenSessionBadge.className = "status-value beta";
       listenIdleView.style.display = "block";
       listenActiveView.style.display = "none";
     } else if (state.isHost) {

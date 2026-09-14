@@ -24,16 +24,24 @@
     });
   } catch (e) {}
 
+  try {
+    Object.defineProperty(window, 'onunload', {
+      get: () => null,
+      set: () => {},
+      configurable: true
+    });
+  } catch (e) {}
+
   const origAddEventListener = window.addEventListener;
   window.addEventListener = function(type, listener, options) {
-    if (type === 'beforeunload') return;
+    if (type === 'beforeunload' || type === 'unload') return;
     return origAddEventListener.call(this, type, listener, options);
   };
 
   try {
     const origETAdd = EventTarget.prototype.addEventListener;
     EventTarget.prototype.addEventListener = function(type, listener, options) {
-      if (type === 'beforeunload' && (this === window || this === document)) return;
+      if ((type === 'beforeunload' || type === 'unload') && (this === window || this === document)) return;
       return origETAdd.call(this, type, listener, options);
     };
   } catch (e) {}

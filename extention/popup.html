@@ -101,6 +101,12 @@
         color: var(--pending);
         background: #2f2a23;
       }
+      .status-value.beta {
+        color: var(--accent);
+        background: rgba(114, 137, 218, 0.15);
+        font-weight: 700;
+        letter-spacing: 0.5px;
+      }
       .song-info {
         margin-top: 2px;
         font-style: italic;
@@ -180,14 +186,15 @@
           margin-bottom: 4px;
         "
       >
-        <span class="status-label">
-          Listen Together</span
-        >
+        <span class="status-label" style="display: flex; align-items: center; gap: 6px;">
+          Listen Together
+          <a href="https://github.com/FishysPop/Youtube-music-rich-presence/issues" target="_blank" rel="noopener noreferrer" style="font-size: 0.85em; font-weight: 400; color: var(--text-muted); text-decoration: underline; margin-left: 2px;">Issues?</a>
+        </span>
         <span
           id="listenSessionBadge"
-          class="status-value disconnected"
+          class="status-value beta"
           style="font-size: 0.85em; padding: 1px 5px"
-          >Idle</span
+          >BETA</span
         >
       </div>
 

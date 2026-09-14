@@ -623,4 +623,19 @@ test('resolveAppReadinessState recovers safely after 5000ms maximum timeout', ()
   assert.strictEqual(res.delayMs, 300);
 });
 
+function shouldInterceptEventListener(type, target) {
+  if (type === 'beforeunload' || type === 'unload') {
+    return target === 'window' || target === 'document';
+  }
+  return false;
+}
+
+test('shouldInterceptEventListener: drops beforeunload and unload on window and document', () => {
+  assert.strictEqual(shouldInterceptEventListener('beforeunload', 'window'), true);
+  assert.strictEqual(shouldInterceptEventListener('unload', 'window'), true);
+  assert.strictEqual(shouldInterceptEventListener('unload', 'document'), true);
+  assert.strictEqual(shouldInterceptEventListener('click', 'window'), false);
+  assert.strictEqual(shouldInterceptEventListener('unload', 'button'), false);
+});
+
 runAllTests();

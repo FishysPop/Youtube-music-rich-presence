@@ -1024,6 +1024,8 @@ function showSyncToast(message) {
 
 let isPopoverOpen = false;
 
+let currentGuidePage = 1;
+
 function dismissListenTogetherGuide() {
   hasSeenListenTogetherGuide = true;
   isGuideDismissedThisSession = true;
@@ -1042,7 +1044,7 @@ function positionListenTogetherGuide() {
   const rect = btn.getBoundingClientRect();
   if (rect.width === 0 && rect.height === 0) return;
 
-  const guideWidth = guide.offsetWidth || 230;
+  const guideWidth = guide.offsetWidth || 300;
   const btnCenterX = rect.left + rect.width / 2;
   const bottomPos = Math.max(75, window.innerHeight - rect.top + 12);
   const rightPos = Math.max(16, window.innerWidth - btnCenterX - (guideWidth / 2));
@@ -1055,6 +1057,120 @@ function positionListenTogetherGuide() {
     const guideLeft = window.innerWidth - rightPos - guideWidth;
     const arrowLeft = Math.max(16, Math.min(guideWidth - 16, btnCenterX - guideLeft));
     arrow.style.left = `${arrowLeft}px`;
+  }
+}
+
+function renderListenTogetherGuideContent() {
+  const guide = document.getElementById('ytm-listen-together-guide');
+  if (!guide) return;
+
+  const isPage1 = currentGuidePage === 1;
+
+  let bodyHtml = '';
+  let buttonsHtml = '';
+
+  if (isPage1) {
+    bodyHtml = `
+      <div style="font-weight:600; font-size:14px; margin-bottom:6px; color:#ffffff;">Sync music with friends</div>
+      <div style="font-size:12.5px; color:rgba(255,255,255,0.92); line-height:1.45; margin-bottom:14px;">
+        Listen to tracks at the exact same time with friends across computers. Track changes, play, pause, and seek stay synchronized.
+      </div>
+    `;
+    buttonsHtml = `
+      <button id="ytm-guide-got-it-btn" style="background:transparent; border:none; color:rgba(255,255,255,0.85); font-size:12px; font-weight:500; cursor:pointer; padding:6px 10px; border-radius:4px; transition:background 0.1s;">Got it</button>
+      <button id="ytm-guide-next-btn" style="background:#ffffff; border:none; color:#065fd4; font-size:12px; font-weight:600; cursor:pointer; padding:6px 14px; border-radius:4px; transition:opacity 0.1s;">Next &rarr;</button>
+    `;
+  } else {
+    bodyHtml = `
+      <div style="font-weight:600; font-size:14px; margin-bottom:6px; color:#ffffff;">How to host or join</div>
+      <div style="font-size:12px; color:rgba(255,255,255,0.92); line-height:1.5; margin-bottom:14px;">
+        <div style="margin-bottom:6px;"><strong style="color:#ffffff;">1. Open menu:</strong> Click the headphones button on the player bar anytime.</div>
+        <div style="margin-bottom:6px;"><strong style="color:#ffffff;">2. Host:</strong> Click <em>Start hosting session</em> and copy your room link to share.</div>
+        <div><strong style="color:#ffffff;">3. Join:</strong> Paste any friend's room code or link and click <em>Join</em>.</div>
+      </div>
+    `;
+    buttonsHtml = `
+      <button id="ytm-guide-back-btn" style="background:transparent; border:none; color:rgba(255,255,255,0.85); font-size:12px; font-weight:500; cursor:pointer; padding:6px 10px; border-radius:4px; transition:background 0.1s;">&larr; Back</button>
+      <button id="ytm-guide-try-btn" style="background:#ffffff; border:none; color:#065fd4; font-size:12px; font-weight:600; cursor:pointer; padding:6px 14px; border-radius:4px; transition:opacity 0.1s;">Try it now</button>
+    `;
+  }
+
+  guide.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <span style="font-size:13px; font-weight:600; color:#ffffff;">Listen Together</span>
+        <span style="background:rgba(255,255,255,0.2); color:#ffffff; font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:3px; letter-spacing:0.5px; text-transform:uppercase;">BETA</span>
+        <a href="https://github.com/FishysPop/Youtube-music-rich-presence/issues" target="_blank" rel="noopener noreferrer" style="color:rgba(255,255,255,0.7); font-size:11px; text-decoration:underline; cursor:pointer;" onmouseenter="this.style.color='#ffffff'" onmouseleave="this.style.color='rgba(255,255,255,0.7)'">Issues?</a>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="background:rgba(255,255,255,0.18); font-size:10.5px; font-weight:600; padding:1px 6px; border-radius:10px; letter-spacing:0.5px; color:#ffffff;">${currentGuidePage} of 2</span>
+        <button id="ytm-guide-close-btn" style="background:transparent; border:none; color:rgba(255,255,255,0.7); font-size:16px; line-height:1; cursor:pointer; padding:0 2px; margin:0;">✕</button>
+      </div>
+    </div>
+    ${bodyHtml}
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div style="display:flex; gap:4px; align-items:center;">
+        <span style="width:6px; height:6px; border-radius:50%; background:${isPage1 ? '#ffffff' : 'rgba(255,255,255,0.35)'}; display:inline-block;"></span>
+        <span style="width:6px; height:6px; border-radius:50%; background:${!isPage1 ? '#ffffff' : 'rgba(255,255,255,0.35)'}; display:inline-block;"></span>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        ${buttonsHtml}
+      </div>
+    </div>
+    <div id="ytm-listen-together-guide-arrow" style="position:absolute; bottom:-8px; width:0; height:0; border-left:8px solid transparent; border-right:8px solid transparent; border-top:8px solid #065fd4; transform:translateX(-50%);"></div>
+  `;
+
+  positionListenTogetherGuide();
+
+  const closeBtn = document.getElementById('ytm-guide-close-btn');
+  if (closeBtn) {
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      dismissListenTogetherGuide();
+    };
+  }
+
+  const gotItBtn = document.getElementById('ytm-guide-got-it-btn');
+  if (gotItBtn) {
+    gotItBtn.onmouseenter = () => { gotItBtn.style.background = 'rgba(255,255,255,0.15)'; };
+    gotItBtn.onmouseleave = () => { gotItBtn.style.background = 'transparent'; };
+    gotItBtn.onclick = (e) => {
+      e.stopPropagation();
+      dismissListenTogetherGuide();
+    };
+  }
+
+  const nextBtn = document.getElementById('ytm-guide-next-btn');
+  if (nextBtn) {
+    nextBtn.onmouseenter = () => { nextBtn.style.opacity = '0.9'; };
+    nextBtn.onmouseleave = () => { nextBtn.style.opacity = '1'; };
+    nextBtn.onclick = (e) => {
+      e.stopPropagation();
+      currentGuidePage = 2;
+      renderListenTogetherGuideContent();
+    };
+  }
+
+  const backBtn = document.getElementById('ytm-guide-back-btn');
+  if (backBtn) {
+    backBtn.onmouseenter = () => { backBtn.style.background = 'rgba(255,255,255,0.15)'; };
+    backBtn.onmouseleave = () => { backBtn.style.background = 'transparent'; };
+    backBtn.onclick = (e) => {
+      e.stopPropagation();
+      currentGuidePage = 1;
+      renderListenTogetherGuideContent();
+    };
+  }
+
+  const tryBtn = document.getElementById('ytm-guide-try-btn');
+  if (tryBtn) {
+    tryBtn.onmouseenter = () => { tryBtn.style.opacity = '0.9'; };
+    tryBtn.onmouseleave = () => { tryBtn.style.opacity = '1'; };
+    tryBtn.onclick = (e) => {
+      e.stopPropagation();
+      dismissListenTogetherGuide();
+      if (!isPopoverOpen) togglePlayerBarPopover();
+    };
   }
 }
 
@@ -1078,64 +1194,21 @@ function checkAndShowListenTogetherGuide() {
     color: #ffffff;
     border-radius: 8px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    padding: 12px 14px;
-    width: 230px;
+    padding: 16px 18px;
+    width: 300px;
     box-sizing: border-box;
     font-family: 'Roboto', 'Noto Sans', sans-serif;
     user-select: none;
     line-height: 1.4;
   `;
 
-  guide.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-      <span style="font-size:13px; font-weight:600; color:#ffffff;">Listen Together</span>
-      <button id="ytm-guide-close-btn" style="background:transparent; border:none; color:rgba(255,255,255,0.7); font-size:16px; line-height:1; cursor:pointer; padding:0; margin:0 0 0 8px;">✕</button>
-    </div>
-    <div style="font-size:12px; color:rgba(255,255,255,0.9); margin:6px 0 10px 0;">
-      Listen to music with friends in sync. Start a session or join with a room code.
-    </div>
-    <div style="display:flex; justify-content:flex-end; gap:6px; align-items:center;">
-      <button id="ytm-guide-got-it-btn" style="background:transparent; border:none; color:#ffffff; font-size:12px; font-weight:500; cursor:pointer; padding:4px 8px; border-radius:4px; transition:background 0.1s;">Got it</button>
-      <button id="ytm-guide-try-btn" style="background:#ffffff; border:none; color:#065fd4; font-size:12px; font-weight:600; cursor:pointer; padding:5px 12px; border-radius:4px; transition:opacity 0.1s;">Try it</button>
-    </div>
-    <div id="ytm-listen-together-guide-arrow" style="position:absolute; bottom:-7px; width:0; height:0; border-left:7px solid transparent; border-right:7px solid transparent; border-top:7px solid #065fd4; transform:translateX(-50%);"></div>
-  `;
-
-  document.body.appendChild(guide);
-  positionListenTogetherGuide();
-
-  const closeBtn = document.getElementById('ytm-guide-close-btn');
-  if (closeBtn) {
-    closeBtn.onclick = (e) => {
-      e.stopPropagation();
-      dismissListenTogetherGuide();
-    };
-  }
-
-  const gotItBtn = document.getElementById('ytm-guide-got-it-btn');
-  if (gotItBtn) {
-    gotItBtn.onmouseenter = () => { gotItBtn.style.background = 'rgba(255,255,255,0.15)'; };
-    gotItBtn.onmouseleave = () => { gotItBtn.style.background = 'transparent'; };
-    gotItBtn.onclick = (e) => {
-      e.stopPropagation();
-      dismissListenTogetherGuide();
-    };
-  }
-
-  const tryBtn = document.getElementById('ytm-guide-try-btn');
-  if (tryBtn) {
-    tryBtn.onmouseenter = () => { tryBtn.style.opacity = '0.9'; };
-    tryBtn.onmouseleave = () => { tryBtn.style.opacity = '1'; };
-    tryBtn.onclick = (e) => {
-      e.stopPropagation();
-      dismissListenTogetherGuide();
-      if (!isPopoverOpen) togglePlayerBarPopover();
-    };
-  }
-
   guide.onclick = (e) => {
     e.stopPropagation();
   };
+
+  document.body.appendChild(guide);
+  currentGuidePage = 1;
+  renderListenTogetherGuideContent();
 }
 
 function ensurePlayerBarButton() {
@@ -1324,8 +1397,8 @@ function renderPopoverContent() {
           </svg>
           <span style="font-weight:500; color:#ffffff; font-size:14px;">Listen Together</span>
         </div>
-        <span style="background:rgba(255, 255, 255, 0.08); color:rgba(255, 255, 255, 0.5); font-size:11px; font-weight:500; padding:2px 6px; border-radius:2px; text-transform:uppercase; letter-spacing:0.5px;">
-          Idle
+        <span style="background:rgba(62, 166, 255, 0.15); color:#3ea6ff; font-size:11px; font-weight:700; padding:2px 6px; border-radius:2px; text-transform:uppercase; letter-spacing:0.5px;">
+          BETA
         </span>
       </div>
 
