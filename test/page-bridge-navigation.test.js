@@ -167,9 +167,10 @@ function handleBridgeLoadVideo({
   store,
   windowObj,
   isOnWatch = true,
-  hasActivePlayer = true
+  hasActivePlayer = true,
+  lastSyncedVideoId = null
 }) {
-  if (isOnWatch && hasActivePlayer && currentVid === videoId) {
+  if (hasActivePlayer && currentVid === videoId) {
     if (typeof currentTime === 'number' && player && typeof player.seekTo === 'function') {
       player.seekTo(currentTime, true);
     }
@@ -181,8 +182,8 @@ function handleBridgeLoadVideo({
     return { actionTaken: 'same_video_in_place' };
   }
 
-  // If initial connection or not on watch page with active player: direct browser navigation
-  if (!isOnWatch || !hasActivePlayer || !currentVid || currentQueueIdx === -1) {
+  // Direct browser navigation is strictly for initial connection without an active player
+  if (!hasActivePlayer && !lastSyncedVideoId) {
     const targetUrl = buildWatchUrl(videoId, currentTime);
     if (windowObj && windowObj.location && typeof windowObj.location.assign === 'function') {
       windowObj.location.assign(targetUrl);
@@ -460,9 +461,9 @@ test('syncQueueProperly dispatches ADD_ITEMS for new upcoming tracks and MOVE_IT
   assert.strictEqual(add.payload.items[0].playlistPanelVideoRenderer.videoId, 'brandNew3');
 });
 
-function shouldTriggerRemoteTrackChange(packetVideoId, currentVid, lastSyncedVideoId, isOnWatch = true, hasActivePlayer = true) {
+function shouldTriggerRemoteTrackChange(packetVideoId, currentVid, lastSyncedVideoId, hasActivePlayer = true) {
   if (!packetVideoId) return false;
-  if (!isOnWatch || !hasActivePlayer) return true;
+  if (!hasActivePlayer && !lastSyncedVideoId) return true;
   return packetVideoId !== lastSyncedVideoId || (!!currentVid && packetVideoId !== currentVid);
 }
 
@@ -499,12 +500,76 @@ test('shouldTriggerRemoteTrackChange correctly triggers when currentVid or lastS
   assert.strictEqual(shouldTriggerRemoteTrackChange(null, 'vid11111111', 'vid11111111'), false);
 });
 
-test('shouldTriggerRemoteTrackChange triggers navigation if isOnWatch is false even if lastSyncedVideoId matches', () => {
-  assert.strictEqual(shouldTriggerRemoteTrackChange('vid11111111', 'vid11111111', 'vid11111111', false, true), true);
+test('shouldTriggerRemoteTrackChange does NOT trigger when playing matching track even if on home page or minimized', () => {
+  assert.strictEqual(shouldTriggerRemoteTrackChange('vid11111111', 'vid11111111', 'vid11111111', true), false);
 });
 
-test('shouldTriggerRemoteTrackChange triggers navigation if hasActivePlayer is false even if lastSyncedVideoId matches', () => {
-  assert.strictEqual(shouldTriggerRemoteTrackChange('vid11111111', 'vid11111111', 'vid11111111', true, false), true);
+test('shouldTriggerRemoteTrackChange triggers initial navigation only if hasActivePlayer is false and session not synced', () => {
+  assert.strictEqual(shouldTriggerRemoteTrackChange('vid11111111', null, null, false), true);
+  assert.strictEqual(shouldTriggerRemoteTrackChange('vid11111111', 'vid11111111', 'vid11111111', false), false);
+});
+
+test('handleBridgeLoadVideo on home screen with active player uses internal injection and next button, not window assign', () => {
+  let dispatchedAction = null;
+  let nextClicked = false;
+  let windowAssignCalled = false;
+
+  const mockStore = {
+    dispatch: (a) => { dispatchedAction = a; }
+  };
+  const mockNextBtn = {
+    disabled: false,
+    click: () => { nextClicked = true; }
+  };
+  const mockWindow = {
+    location: { assign: () => { windowAssignCalled = true; } }
+  };
+
+  const res = handleBridgeLoadVideo({
+    isOnWatch: false,
+    hasActivePlayer: true,
+    lastSyncedVideoId: 'rick1111111',
+    currentVid: 'rick1111111',
+    videoId: 'despacito222',
+    currentQueueIdx: 0,
+    queueItems: [{ videoId: 'rick1111111' }],
+    store: mockStore,
+    nextBtn: mockNextBtn,
+    windowObj: mockWindow
+  });
+
+  assert.strictEqual(res.actionTaken, 'inject_and_next');
+  assert.strictEqual(dispatchedAction.type, 'ADD_ITEMS');
+  assert.strictEqual(nextClicked, true);
+  assert.strictEqual(windowAssignCalled, false);
+});
+
+test('handleBridgeLoadVideo on home screen with active player performs in-place seek without navigation', () => {
+  let seekTime = null;
+  let windowAssignCalled = false;
+  const mockPlayer = {
+    seekTo: (t) => { seekTime = t; },
+    playVideo: () => {}
+  };
+  const mockWindow = {
+    location: { assign: () => { windowAssignCalled = true; } }
+  };
+
+  const res = handleBridgeLoadVideo({
+    isOnWatch: false,
+    hasActivePlayer: true,
+    lastSyncedVideoId: 'trackSame11',
+    currentVid: 'trackSame11',
+    videoId: 'trackSame11',
+    currentTime: 42,
+    isPlaying: true,
+    player: mockPlayer,
+    windowObj: mockWindow
+  });
+
+  assert.strictEqual(res.actionTaken, 'same_video_in_place');
+  assert.strictEqual(seekTime, 42);
+  assert.strictEqual(windowAssignCalled, false);
 });
 
 test('isHostTrackChangeDetected detects changes by videoId even when title and artist match', () => {

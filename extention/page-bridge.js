@@ -11,6 +11,33 @@
 
   bridgeLog('Script successfully installed in MAIN world');
 
+  window.addEventListener('beforeunload', (e) => {
+    e.stopImmediatePropagation();
+    delete e.returnValue;
+  }, true);
+
+  try {
+    Object.defineProperty(window, 'onbeforeunload', {
+      get: () => null,
+      set: () => {},
+      configurable: true
+    });
+  } catch (e) {}
+
+  const origAddEventListener = window.addEventListener;
+  window.addEventListener = function(type, listener, options) {
+    if (type === 'beforeunload') return;
+    return origAddEventListener.call(this, type, listener, options);
+  };
+
+  try {
+    const origETAdd = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function(type, listener, options) {
+      if (type === 'beforeunload' && (this === window || this === document)) return;
+      return origETAdd.call(this, type, listener, options);
+    };
+  } catch (e) {}
+
   window.__syncedUpcomingTracks = [];
 
   function formatUpcomingTrackItem(track) {
@@ -214,7 +241,7 @@
   }
 
   function executeNavigation(targetVid, targetTime) {
-    const { app } = getQueueContext();
+    const { app, player } = getQueueContext();
     const startSec = Math.floor(targetTime || 0);
     const watchEndpoint = { videoId: targetVid };
     if (startSec > 0) watchEndpoint.startTimeSeconds = startSec;
@@ -249,8 +276,16 @@
       } catch (e) {}
     }
 
-    const isOnWatch = window.location.pathname.startsWith('/watch');
-    if (!navigated && !isOnWatch) {
+    if (!navigated && player && typeof player.loadVideoById === 'function') {
+      try {
+        player.loadVideoById(targetVid, startSec);
+        navigated = true;
+      } catch (e) {}
+    }
+
+    const video = document.querySelector('video');
+    const hasPlayer = Boolean((document.documentElement.getAttribute('data-ytm-video-id') || player) && video && (video.readyState > 0 || video.src));
+    if (!navigated && !hasPlayer) {
       const searchParams = new URLSearchParams();
       searchParams.set('v', targetVid);
       if (startSec > 0) searchParams.set('t', startSec);
@@ -350,12 +385,11 @@
       }
 
       const { app, playerBar, queueObj, store, items, currentQueueIdx, currentVid } = getQueueContext();
-      const isOnWatch = window.location.pathname.startsWith('/watch');
-      const hasActivePlayer = Boolean(isOnWatch && currentVid && (document.querySelector('video') || player));
+      const hasActivePlayer = Boolean(currentVid && (document.querySelector('video') || player));
 
-      bridgeLog(`LOAD_VIDEO target=${videoId}, currently playing=${currentVid}`);
+      bridgeLog(`LOAD_VIDEO target=${videoId}, currently playing=${currentVid}, hasActivePlayer=${hasActivePlayer}`);
 
-      if (isOnWatch && hasActivePlayer && currentVid === videoId) {
+      if (hasActivePlayer && currentVid === videoId) {
         bridgeLog(`Video ${videoId} is already loaded. Adjusting playback state: currentTime=${currentTime}, isPlaying=${isPlaying}`);
         if (typeof currentTime === 'number' && player && typeof player.seekTo === 'function') {
           player.seekTo(currentTime, true);
@@ -368,8 +402,8 @@
         return;
       }
 
-      if (!isOnWatch || !hasActivePlayer || !currentVid || currentQueueIdx === -1) {
-        bridgeLog(`Direct navigation required (isOnWatch=${isOnWatch}, hasActivePlayer=${hasActivePlayer}, currentVid=${currentVid}, currentQueueIdx=${currentQueueIdx}) for ${videoId}`);
+      if (!hasActivePlayer || !currentVid) {
+        bridgeLog(`Direct navigation required (hasActivePlayer=${hasActivePlayer}, currentVid=${currentVid}) for ${videoId}`);
         executeNavigation(videoId, currentTime);
         return;
       }
@@ -589,16 +623,25 @@
     const player = document.getElementById('movie_player') ||
                    document.querySelector('ytmusic-player') ||
                    document.querySelector('#player');
+    let vid = null;
     if (player && typeof player.getVideoData === 'function') {
       try {
         const data = player.getVideoData();
-        const vid = data && data.video_id;
-        if (vid && /^[a-zA-Z0-9_-]{11}$/.test(vid)) {
-          if (document.documentElement.getAttribute('data-ytm-video-id') !== vid) {
-            document.documentElement.setAttribute('data-ytm-video-id', vid);
-          }
-        }
+        vid = data && data.video_id;
       } catch (e) {}
+    }
+    if (!vid || !/^[a-zA-Z0-9_-]{11}$/.test(vid)) {
+      try {
+        const app = document.querySelector('ytmusic-app');
+        const state = app && typeof app.getState === 'function' ? app.getState() : null;
+        vid = state?.player?.playerResponse?.videoDetails?.videoId ||
+              state?.queue?.items?.[state?.queue?.selectedItemIndex]?.playlistPanelVideoRenderer?.videoId;
+      } catch (e) {}
+    }
+    if (vid && /^[a-zA-Z0-9_-]{11}$/.test(vid)) {
+      if (document.documentElement.getAttribute('data-ytm-video-id') !== vid) {
+        document.documentElement.setAttribute('data-ytm-video-id', vid);
+      }
     }
 
     try {

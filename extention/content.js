@@ -191,24 +191,38 @@ function findVideoElement() {
   return null;
 }
 
+let lastKnownVideoId = null;
+
 function getCurrentVideoId() {
   try {
     const bridgeVid = document.documentElement.getAttribute('data-ytm-video-id');
-    if (bridgeVid && /^[a-zA-Z0-9_-]{11}$/.test(bridgeVid)) return bridgeVid;
+    if (bridgeVid && /^[a-zA-Z0-9_-]{11}$/.test(bridgeVid)) {
+      lastKnownVideoId = bridgeVid;
+      return bridgeVid;
+    }
 
     const urlParams = new URLSearchParams(window.location.search);
     const v = urlParams.get('v');
-    if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
+    if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) {
+      lastKnownVideoId = v;
+      return v;
+    }
 
     const pathMatch = window.location.pathname.match(/\/watch\/([a-zA-Z0-9_-]{11})/);
-    if (pathMatch && pathMatch[1]) return pathMatch[1];
+    if (pathMatch && pathMatch[1]) {
+      lastKnownVideoId = pathMatch[1];
+      return pathMatch[1];
+    }
 
     const playerBar = document.querySelector('ytmusic-player-bar');
     if (playerBar) {
       const img = playerBar.querySelector('.thumbnail-image-wrapper img') || playerBar.querySelector('img.image');
       if (img && img.src) {
         const match = img.src.match(/\/vi\/([a-zA-Z0-9_-]{11})\//) || img.src.match(/\/vi_webp\/([a-zA-Z0-9_-]{11})\//);
-        if (match && match[1]) return match[1];
+        if (match && match[1]) {
+          lastKnownVideoId = match[1];
+          return match[1];
+        }
       }
 
       const root = playerBar.shadowRoot || playerBar;
@@ -216,7 +230,10 @@ function getCurrentVideoId() {
       for (const link of links) {
         if (link.href) {
           const match = link.href.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-          if (match && match[1]) return match[1];
+          if (match && match[1]) {
+            lastKnownVideoId = match[1];
+            return match[1];
+          }
         }
       }
     }
@@ -227,7 +244,10 @@ function getCurrentVideoId() {
         for (const art of artwork) {
           if (art && art.src) {
             const match = art.src.match(/\/vi\/([a-zA-Z0-9_-]{11})\//) || art.src.match(/\/vi_webp\/([a-zA-Z0-9_-]{11})\//);
-            if (match && match[1]) return match[1];
+            if (match && match[1]) {
+              lastKnownVideoId = match[1];
+              return match[1];
+            }
           }
         }
       }
@@ -236,7 +256,10 @@ function getCurrentVideoId() {
     const player = document.querySelector('ytmusic-player') || document.querySelector('#player') || document.querySelector('#movie_player');
     if (player) {
       const vidAttr = player.getAttribute('video-id') || player.getAttribute('data-video-id');
-      if (vidAttr && /^[a-zA-Z0-9_-]{11}$/.test(vidAttr)) return vidAttr;
+      if (vidAttr && /^[a-zA-Z0-9_-]{11}$/.test(vidAttr)) {
+        lastKnownVideoId = vidAttr;
+        return vidAttr;
+      }
     }
 
     const titleLink = document.querySelector('ytmusic-player-bar .middle-controls a') || 
@@ -244,9 +267,17 @@ function getCurrentVideoId() {
                       document.querySelector('a.ytp-title-link');
     if (titleLink && titleLink.href) {
       const match = titleLink.href.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-      if (match && match[1]) return match[1];
+      if (match && match[1]) {
+        lastKnownVideoId = match[1];
+        return match[1];
+      }
     }
   } catch (e) {}
+
+  const video = findVideoElement();
+  if (lastKnownVideoId && video && (video.readyState > 0 || video.src) && !video.ended) {
+    return lastKnownVideoId;
+  }
   return null;
 }
 
@@ -591,17 +622,29 @@ let lastTrackChangeTime = 0;
 let lastKnownPeersMap = new Map();
 let autoStopHostingTimeoutMinutes = 30;
 let hostEmptyStartTime = null;
+let hasSeenListenTogetherGuide = false;
+let isGuideDismissedThisSession = false;
 
 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-  chrome.storage.local.get({ autoStopHostingTimeoutMinutes: 30 }, (res) => {
-    if (res && res.autoStopHostingTimeoutMinutes !== undefined) {
-      autoStopHostingTimeoutMinutes = Number(res.autoStopHostingTimeoutMinutes) || 30;
+  chrome.storage.local.get({ autoStopHostingTimeoutMinutes: 30, hasSeenListenTogetherGuide: false }, (res) => {
+    if (res) {
+      if (res.autoStopHostingTimeoutMinutes !== undefined) {
+        autoStopHostingTimeoutMinutes = Number(res.autoStopHostingTimeoutMinutes) || 30;
+      }
+      if (res.hasSeenListenTogetherGuide) {
+        hasSeenListenTogetherGuide = true;
+      }
     }
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.autoStopHostingTimeoutMinutes) {
-      autoStopHostingTimeoutMinutes = Number(changes.autoStopHostingTimeoutMinutes.newValue) || 0;
+    if (area === 'local') {
+      if (changes.autoStopHostingTimeoutMinutes) {
+        autoStopHostingTimeoutMinutes = Number(changes.autoStopHostingTimeoutMinutes.newValue) || 0;
+      }
+      if (changes.hasSeenListenTogetherGuide) {
+        hasSeenListenTogetherGuide = Boolean(changes.hasSeenListenTogetherGuide.newValue);
+      }
     }
   });
 }
@@ -686,10 +729,11 @@ function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, 
   console.log(`[Listen Together] Posting LOAD_VIDEO to page-bridge for videoId: ${videoId}`);
   showSyncToast(`${trackTitle || 'Track'}${artist ? ' - ' + artist : ''}`);
 
-  const isOnWatch = window.location.pathname.startsWith('/watch');
-  const hasActivePlayer = Boolean(isOnWatch && getCurrentVideoId() && findVideoElement());
+  const currentVid = getCurrentVideoId();
+  const video = findVideoElement();
+  const hasActivePlayer = Boolean(currentVid && video && (video.readyState > 0 || video.src));
 
-  if (!isOnWatch || !hasActivePlayer) {
+  if (!hasActivePlayer && !lastSyncedVideoId) {
     if (syncEngine && syncEngine.role === 'LISTENER' && syncEngine.roomId) {
       chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: syncEngine.roomId } });
     }
@@ -761,21 +805,20 @@ function handleRemoteSyncAction(packet) {
     return;
   }
 
-  const isOnWatchPage = window.location.pathname.startsWith('/watch');
   const currentVid = getCurrentVideoId();
   const video = findVideoElement();
-  const hasActivePlayer = Boolean(isOnWatchPage && currentVid && video);
+  const hasActivePlayer = Boolean(currentVid && video && (video.readyState > 0 || video.src));
 
   const needsNavigation = Boolean(
     packet.videoId && (
-      !hasActivePlayer ||
+      (!hasActivePlayer && !lastSyncedVideoId) ||
       currentVid !== packet.videoId ||
       lastSyncedVideoId !== packet.videoId
     )
   );
 
   if (needsNavigation) {
-    console.log(`[Listen Together Listener] handleRemoteSyncAction detected track mismatch or inactive player (packet.videoId=${packet.videoId}, currentVid=${currentVid}, lastSynced=${lastSyncedVideoId}, hasActivePlayer=${hasActivePlayer}, isOnWatch=${isOnWatchPage}). Triggering track change.`);
+    console.log(`[Listen Together Listener] handleRemoteSyncAction detected track change (packet.videoId=${packet.videoId}, currentVid=${currentVid}, lastSynced=${lastSyncedVideoId}, hasActivePlayer=${hasActivePlayer}). Triggering track change.`);
     handleRemoteTrackChange(packet);
     return;
   }
@@ -852,20 +895,19 @@ function handleRemoteTrackChange(packet) {
     }, '*');
   }
 
-  const isOnWatchPage = window.location.pathname.startsWith('/watch');
   const currentVid = getCurrentVideoId();
   const video = findVideoElement();
-  const hasActivePlayer = Boolean(isOnWatchPage && currentVid && video);
+  const hasActivePlayer = Boolean(currentVid && video && (video.readyState > 0 || video.src));
 
   const needsNavigation = Boolean(
     packet.videoId && (
-      !hasActivePlayer ||
+      (!hasActivePlayer && !lastSyncedVideoId) ||
       currentVid !== packet.videoId ||
       lastSyncedVideoId !== packet.videoId
     )
   );
 
-  console.log(`[Listen Together Listener] handleRemoteTrackChange: packet.videoId=${packet.videoId}, currentVid=${currentVid}, lastSyncedVideoId=${lastSyncedVideoId}, hasActivePlayer=${hasActivePlayer}, isOnWatch=${isOnWatchPage}`);
+  console.log(`[Listen Together Listener] handleRemoteTrackChange: packet.videoId=${packet.videoId}, currentVid=${currentVid}, lastSyncedVideoId=${lastSyncedVideoId}, hasActivePlayer=${hasActivePlayer}`);
 
   if (needsNavigation) {
     console.log(`[Listen Together Listener] Triggering navigation for: "${packet.track}" (ID: ${packet.videoId})`);
@@ -982,6 +1024,120 @@ function showSyncToast(message) {
 
 let isPopoverOpen = false;
 
+function dismissListenTogetherGuide() {
+  hasSeenListenTogetherGuide = true;
+  isGuideDismissedThisSession = true;
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.set({ hasSeenListenTogetherGuide: true });
+  }
+  const guide = document.getElementById('ytm-listen-together-guide');
+  if (guide) guide.remove();
+}
+
+function positionListenTogetherGuide() {
+  const guide = document.getElementById('ytm-listen-together-guide');
+  const btn = ensurePlayerBarButton();
+  if (!guide || !btn) return;
+
+  const rect = btn.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return;
+
+  const guideWidth = guide.offsetWidth || 230;
+  const btnCenterX = rect.left + rect.width / 2;
+  const bottomPos = Math.max(75, window.innerHeight - rect.top + 12);
+  const rightPos = Math.max(16, window.innerWidth - btnCenterX - (guideWidth / 2));
+
+  guide.style.bottom = `${bottomPos}px`;
+  guide.style.right = `${rightPos}px`;
+
+  const arrow = document.getElementById('ytm-listen-together-guide-arrow');
+  if (arrow) {
+    const guideLeft = window.innerWidth - rightPos - guideWidth;
+    const arrowLeft = Math.max(16, Math.min(guideWidth - 16, btnCenterX - guideLeft));
+    arrow.style.left = `${arrowLeft}px`;
+  }
+}
+
+function checkAndShowListenTogetherGuide() {
+  if (hasSeenListenTogetherGuide || isGuideDismissedThisSession) return;
+  if (syncEngine && syncEngine.role !== 'NONE') {
+    dismissListenTogetherGuide();
+    return;
+  }
+  if (document.getElementById('ytm-listen-together-guide')) return;
+
+  const btn = ensurePlayerBarButton();
+  if (!btn) return;
+
+  const guide = document.createElement('div');
+  guide.id = 'ytm-listen-together-guide';
+  guide.style.cssText = `
+    position: fixed;
+    z-index: 1000002;
+    background: #065fd4;
+    color: #ffffff;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    padding: 12px 14px;
+    width: 230px;
+    box-sizing: border-box;
+    font-family: 'Roboto', 'Noto Sans', sans-serif;
+    user-select: none;
+    line-height: 1.4;
+  `;
+
+  guide.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+      <span style="font-size:13px; font-weight:600; color:#ffffff;">Listen Together</span>
+      <button id="ytm-guide-close-btn" style="background:transparent; border:none; color:rgba(255,255,255,0.7); font-size:16px; line-height:1; cursor:pointer; padding:0; margin:0 0 0 8px;">✕</button>
+    </div>
+    <div style="font-size:12px; color:rgba(255,255,255,0.9); margin:6px 0 10px 0;">
+      Listen to music with friends in sync. Start a session or join with a room code.
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:6px; align-items:center;">
+      <button id="ytm-guide-got-it-btn" style="background:transparent; border:none; color:#ffffff; font-size:12px; font-weight:500; cursor:pointer; padding:4px 8px; border-radius:4px; transition:background 0.1s;">Got it</button>
+      <button id="ytm-guide-try-btn" style="background:#ffffff; border:none; color:#065fd4; font-size:12px; font-weight:600; cursor:pointer; padding:5px 12px; border-radius:4px; transition:opacity 0.1s;">Try it</button>
+    </div>
+    <div id="ytm-listen-together-guide-arrow" style="position:absolute; bottom:-7px; width:0; height:0; border-left:7px solid transparent; border-right:7px solid transparent; border-top:7px solid #065fd4; transform:translateX(-50%);"></div>
+  `;
+
+  document.body.appendChild(guide);
+  positionListenTogetherGuide();
+
+  const closeBtn = document.getElementById('ytm-guide-close-btn');
+  if (closeBtn) {
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      dismissListenTogetherGuide();
+    };
+  }
+
+  const gotItBtn = document.getElementById('ytm-guide-got-it-btn');
+  if (gotItBtn) {
+    gotItBtn.onmouseenter = () => { gotItBtn.style.background = 'rgba(255,255,255,0.15)'; };
+    gotItBtn.onmouseleave = () => { gotItBtn.style.background = 'transparent'; };
+    gotItBtn.onclick = (e) => {
+      e.stopPropagation();
+      dismissListenTogetherGuide();
+    };
+  }
+
+  const tryBtn = document.getElementById('ytm-guide-try-btn');
+  if (tryBtn) {
+    tryBtn.onmouseenter = () => { tryBtn.style.opacity = '0.9'; };
+    tryBtn.onmouseleave = () => { tryBtn.style.opacity = '1'; };
+    tryBtn.onclick = (e) => {
+      e.stopPropagation();
+      dismissListenTogetherGuide();
+      if (!isPopoverOpen) togglePlayerBarPopover();
+    };
+  }
+
+  guide.onclick = (e) => {
+    e.stopPropagation();
+  };
+}
+
 function ensurePlayerBarButton() {
   const playerBar = document.querySelector('ytmusic-player-bar');
   if (!playerBar) return null;
@@ -1007,7 +1163,7 @@ function ensurePlayerBarButton() {
     btn.title = 'Listen Together';
     btn.setAttribute('aria-label', 'Listen Together');
 
-btn.style.cssText = `
+    btn.style.cssText = `
       background: transparent;
       border: none;
       outline: none;
@@ -1048,6 +1204,7 @@ btn.style.cssText = `
 
     btn.onclick = (e) => {
       e.stopPropagation();
+      dismissListenTogetherGuide();
       togglePlayerBarPopover();
     };
   }
@@ -1110,12 +1267,18 @@ function togglePlayerBarPopover() {
       overflow: hidden;
     `;
 
+    popover.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+
     document.addEventListener('click', (e) => {
+      if (!isPopoverOpen || !popover) return;
       const btn = ensurePlayerBarButton();
-      if (popover && !popover.contains(e.target) && e.target !== btn && (!btn || !btn.contains(e.target))) {
-        isPopoverOpen = false;
-        popover.style.display = 'none';
-      }
+      if (popover.contains(e.target) || (e.composedPath && e.composedPath().includes(popover))) return;
+      if (btn && (e.target === btn || btn.contains(e.target) || (e.composedPath && e.composedPath().includes(btn)))) return;
+      if (e.target && e.target.ownerDocument && !e.target.ownerDocument.contains(e.target)) return;
+      isPopoverOpen = false;
+      popover.style.display = 'none';
     });
 
     document.body.appendChild(popover);
@@ -1137,98 +1300,22 @@ function renderPopoverContent() {
   const popover = document.getElementById('ytm-listen-together-popover');
   if (!popover) return;
 
-  if (syncEngine && syncEngine.role !== 'NONE') {
-    const isHost = syncEngine.isHost;
-    const roomId = syncEngine.roomId || '';
-    const count = syncEngine.getConnectedPeerCount();
-    const peerList = syncEngine.getConnectedPeerList();
-    const roleText = isHost ? (count > 0 ? 'Hosting' : 'Waiting') : 'Synced';
-    
-    let membersHtml = '';
-    if (isHost) {
-      if (peerList.length > 0) {
-        const names = peerList.map(p => escapeHtml(p.name)).join(', ');
-        membersHtml = `<div style="padding:4px 16px 8px 16px; font-size:13px; color:rgba(255, 255, 255, 0.7); line-height:1.4;"><strong style="color:#ffffff;">Listening:</strong> ${names}</div>`;
-      } else {
-        membersHtml = `<div style="padding:4px 16px 8px 16px; font-size:13px; color:rgba(255, 255, 255, 0.5);">Waiting for friends to join...</div>`;
-      }
-    } else {
-      const hostName = syncEngine.hostName || 'Host';
-      membersHtml = `<div style="padding:4px 16px 4px 16px; font-size:13px; color:rgba(255, 255, 255, 0.7); line-height:1.4;"><strong style="color:#ffffff;">Host:</strong> ${escapeHtml(hostName)}</div>`;
-      if (peerList.length > 1) {
-        const otherNames = peerList.filter(p => p.id !== syncEngine.peerId).map(p => escapeHtml(p.name)).join(', ');
-        if (otherNames) {
-          membersHtml += `<div style="padding:0 16px 6px 16px; font-size:12px; color:rgba(255, 255, 255, 0.5);">Also listening: ${otherNames}</div>`;
-        }
-      }
+  const isSessionActive = Boolean(syncEngine && syncEngine.role !== 'NONE');
+  const targetView = isSessionActive ? (syncEngine.isHost ? 'host' : 'listener') : 'idle';
+
+  if (targetView === 'idle') {
+    const existingJoinInput = document.getElementById('ytm-popover-join-input');
+    if (popover.dataset.view === 'idle' && existingJoinInput) {
+      return;
     }
 
-    const driftInfo = !isHost ? `<div style="padding:0 16px 8px 16px; font-size:12px; color:rgba(255, 255, 255, 0.5);">Synced (${Math.abs(lastAppliedDriftMs)}ms drift)</div>` : '';
+    const preservedValue = existingJoinInput ? existingJoinInput.value : '';
+    const wasFocused = (document.activeElement === existingJoinInput);
 
-    popover.innerHTML = `
-      <div style="padding:12px 16px 8px 16px; border-bottom:1px solid rgba(255, 255, 255, 0.08); display:flex; justify-content:space-between; align-items:center;">
-        <div style="display:flex; align-items:center; gap:10px;">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="color:rgba(255,255,255,0.7); display:block;">
-            <path d="M12 3a9 9 0 0 0-9 9v7a3 3 0 0 0 3 3h3v-8H5v-2a7 7 0 1 1 14 0v2h-4v8h3a3 3 0 0 0 3-3v-7a9 9 0 0 0-9-9z"/>
-          </svg>
-          <span style="font-weight:500; color:#ffffff; font-size:14px;">Listen Together</span>
-        </div>
-        <span style="background:rgba(255, 255, 255, 0.1); color:rgba(255, 255, 255, 0.7); font-size:11px; font-weight:500; padding:2px 6px; border-radius:2px; text-transform:uppercase; letter-spacing:0.5px;">
-          ${roleText}
-        </span>
-      </div>
+    popover.dataset.view = 'idle';
+    popover.dataset.peerKey = '';
+    popover.dataset.renderedRoomId = '';
 
-      <div style="padding:10px 16px 8px 16px; display:flex; gap:8px; align-items:center;">
-        <input type="text" readonly value="${roomId}" id="ytm-popover-room-input" title="Room Code" style="background:#181818; border:1px solid rgba(255, 255, 255, 0.15); border-radius:4px; height:32px; padding:0 10px; color:#ffffff; font-size:13px; letter-spacing:0.5px; font-family:monospace; font-weight:600; outline:none; flex:1; box-sizing:border-box; min-width:0; cursor:text; user-select:all; -webkit-user-select:all;">
-        <button id="ytm-popover-copy-btn" style="background:transparent; color:#3ea6ff; border:none; border-radius:2px; height:32px; padding:0 8px; font-size:12px; font-weight:500; cursor:pointer; text-transform:uppercase; letter-spacing:0.3px; transition:background 0.15s; flex-shrink:0;">
-          Copy Link
-        </button>
-      </div>
-
-      ${membersHtml}
-      ${driftInfo}
-
-      <div id="ytm-popover-leave-row" style="height:44px; padding:0 16px; display:flex; align-items:center; gap:16px; cursor:pointer; color:#ff4e45; font-size:14px; font-weight:400; border-top:1px solid rgba(255, 255, 255, 0.08); transition:background 0.1s;">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block;">
-          <path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
-        </svg>
-        <span>Leave session</span>
-      </div>
-    `;
-
-    const roomInput = document.getElementById('ytm-popover-room-input');
-    if (roomInput) {
-      roomInput.onclick = () => { roomInput.select(); };
-      roomInput.onfocus = () => { roomInput.select(); };
-    }
-
-    const copyBtn = document.getElementById('ytm-popover-copy-btn');
-    if (copyBtn) {
-      copyBtn.onmouseenter = () => { copyBtn.style.background = 'rgba(62, 166, 255, 0.1)'; };
-      copyBtn.onmouseleave = () => { copyBtn.style.background = 'transparent'; };
-      copyBtn.onclick = () => {
-        const url = `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${roomId}`;
-        navigator.clipboard.writeText(url).then(() => {
-          copyBtn.textContent = 'Copied!';
-          setTimeout(() => { copyBtn.textContent = 'Copy Link'; }, 2000);
-        });
-      };
-    }
-
-    const leaveRow = document.getElementById('ytm-popover-leave-row');
-    if (leaveRow) {
-      leaveRow.onmouseenter = () => { leaveRow.style.background = 'rgba(255, 78, 69, 0.08)'; };
-      leaveRow.onmouseleave = () => { leaveRow.style.background = 'transparent'; };
-      leaveRow.onclick = () => {
-        hostEmptyStartTime = null;
-        chrome.storage.local.remove('listenTogetherSession');
-        if (syncEngine) syncEngine.leaveRoom();
-        updatePlayerBarButton();
-        renderPopoverContent();
-        showSyncToast('Left Listen Together session');
-      };
-    }
-  } else {
     popover.innerHTML = `
       <div style="padding:12px 16px 8px 16px; border-bottom:1px solid rgba(255, 255, 255, 0.08); display:flex; justify-content:space-between; align-items:center;">
         <div style="display:flex; align-items:center; gap:10px;">
@@ -1264,7 +1351,9 @@ function renderPopoverContent() {
     if (startRow) {
       startRow.onmouseenter = () => { startRow.style.background = 'rgba(255, 255, 255, 0.1)'; };
       startRow.onmouseleave = () => { startRow.style.background = 'transparent'; };
-      startRow.onclick = () => {
+      startRow.onclick = (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        dismissListenTogetherGuide();
         initSyncEngine();
         if (syncEngine) {
           chrome.storage.local.remove('listenTogetherSession');
@@ -1282,6 +1371,9 @@ function renderPopoverContent() {
     const joinBtn = document.getElementById('ytm-popover-join-btn');
     const joinInput = document.getElementById('ytm-popover-join-input');
     if (joinBtn && joinInput) {
+      if (preservedValue) joinInput.value = preservedValue;
+      if (wasFocused) joinInput.focus();
+
       const handlePopoverJoin = () => {
         const code = parseSessionInput(joinInput.value);
         if (!code) return;
@@ -1306,7 +1398,11 @@ function renderPopoverContent() {
 
       joinBtn.onmouseenter = () => { joinBtn.style.background = 'rgba(62, 166, 255, 0.1)'; };
       joinBtn.onmouseleave = () => { joinBtn.style.background = 'transparent'; };
-      joinBtn.onclick = handlePopoverJoin;
+      joinBtn.onclick = (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        dismissListenTogetherGuide();
+        handlePopoverJoin();
+      };
       joinInput.onkeydown = (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
@@ -1314,6 +1410,132 @@ function renderPopoverContent() {
         }
       };
     }
+    return;
+  }
+
+  const isHost = syncEngine.isHost;
+  const roomId = syncEngine.roomId || '';
+  const count = syncEngine.getConnectedPeerCount ? syncEngine.getConnectedPeerCount() : 0;
+  const peerList = syncEngine.getConnectedPeerList ? syncEngine.getConnectedPeerList() : [];
+  const roleText = isHost ? (count > 0 ? 'Hosting' : 'Waiting') : 'Synced';
+  const peerKey = peerList.map(p => `${p.id || ''}:${p.name || ''}`).join(',');
+
+  let membersHtml = '';
+  if (isHost) {
+    if (peerList.length > 0) {
+      const names = peerList.map(p => escapeHtml(p.name)).join(', ');
+      membersHtml = `<div style="padding:4px 16px 8px 16px; font-size:13px; color:rgba(255, 255, 255, 0.7); line-height:1.4;"><strong style="color:#ffffff;">Listening:</strong> ${names}</div>`;
+    } else {
+      membersHtml = `<div style="padding:4px 16px 8px 16px; font-size:13px; color:rgba(255, 255, 255, 0.5);">Waiting for friends to join...</div>`;
+    }
+  } else {
+    const hostName = syncEngine.hostName || 'Host';
+    membersHtml = `<div style="padding:4px 16px 4px 16px; font-size:13px; color:rgba(255, 255, 255, 0.7); line-height:1.4;"><strong style="color:#ffffff;">Host:</strong> ${escapeHtml(hostName)}</div>`;
+    if (peerList.length > 1) {
+      const otherNames = peerList.filter(p => p.id !== syncEngine.peerId).map(p => escapeHtml(p.name)).join(', ');
+      if (otherNames) {
+        membersHtml += `<div style="padding:0 16px 6px 16px; font-size:12px; color:rgba(255, 255, 255, 0.5);">Also listening: ${otherNames}</div>`;
+      }
+    }
+  }
+
+  const driftText = !isHost ? `Synced (${Math.abs(lastAppliedDriftMs)}ms drift)` : '';
+
+  if (popover.dataset.view !== targetView) {
+    popover.dataset.view = targetView;
+    popover.dataset.peerKey = peerKey;
+    popover.dataset.renderedRoomId = roomId;
+
+    popover.innerHTML = `
+      <div style="padding:12px 16px 8px 16px; border-bottom:1px solid rgba(255, 255, 255, 0.08); display:flex; justify-content:space-between; align-items:center;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="color:rgba(255,255,255,0.7); display:block;">
+            <path d="M12 3a9 9 0 0 0-9 9v7a3 3 0 0 0 3 3h3v-8H5v-2a7 7 0 1 1 14 0v2h-4v8h3a3 3 0 0 0 3-3v-7a9 9 0 0 0-9-9z"/>
+          </svg>
+          <span style="font-weight:500; color:#ffffff; font-size:14px;">Listen Together</span>
+        </div>
+        <span id="ytm-popover-role-badge" style="background:rgba(255, 255, 255, 0.1); color:rgba(255, 255, 255, 0.7); font-size:11px; font-weight:500; padding:2px 6px; border-radius:2px; text-transform:uppercase; letter-spacing:0.5px;">
+          ${roleText}
+        </span>
+      </div>
+
+      <div style="padding:10px 16px 8px 16px; display:flex; gap:8px; align-items:center;">
+        <input type="text" readonly value="${roomId}" id="ytm-popover-room-input" title="Room Code" style="background:#181818; border:1px solid rgba(255, 255, 255, 0.15); border-radius:4px; height:32px; padding:0 10px; color:#ffffff; font-size:13px; letter-spacing:0.5px; font-family:monospace; font-weight:600; outline:none; flex:1; box-sizing:border-box; min-width:0; cursor:text; user-select:all; -webkit-user-select:all;">
+        <button id="ytm-popover-copy-btn" style="background:transparent; color:#3ea6ff; border:none; border-radius:2px; height:32px; padding:0 8px; font-size:12px; font-weight:500; cursor:pointer; text-transform:uppercase; letter-spacing:0.3px; transition:background 0.15s; flex-shrink:0;">
+          Copy Link
+        </button>
+      </div>
+
+      <div id="ytm-popover-members">${membersHtml}</div>
+      <div id="ytm-popover-drift" style="padding:0 16px 8px 16px; font-size:12px; color:rgba(255, 255, 255, 0.5); display:${driftText ? 'block' : 'none'};">${driftText}</div>
+
+      <div id="ytm-popover-leave-row" style="height:44px; padding:0 16px; display:flex; align-items:center; gap:16px; cursor:pointer; color:#ff4e45; font-size:14px; font-weight:400; border-top:1px solid rgba(255, 255, 255, 0.08); transition:background 0.1s;">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block;">
+          <path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
+        </svg>
+        <span>Leave session</span>
+      </div>
+    `;
+
+    const roomInput = document.getElementById('ytm-popover-room-input');
+    if (roomInput) {
+      roomInput.onclick = () => { roomInput.select(); };
+      roomInput.onfocus = () => { roomInput.select(); };
+    }
+
+    const copyBtn = document.getElementById('ytm-popover-copy-btn');
+    if (copyBtn) {
+      copyBtn.onmouseenter = () => { copyBtn.style.background = 'rgba(62, 166, 255, 0.1)'; };
+      copyBtn.onmouseleave = () => { copyBtn.style.background = 'transparent'; };
+      copyBtn.onclick = (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        const url = `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${roomId}`;
+        navigator.clipboard.writeText(url).then(() => {
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy Link'; }, 2000);
+        });
+      };
+    }
+
+    const leaveRow = document.getElementById('ytm-popover-leave-row');
+    if (leaveRow) {
+      leaveRow.onmouseenter = () => { leaveRow.style.background = 'rgba(255, 78, 69, 0.08)'; };
+      leaveRow.onmouseleave = () => { leaveRow.style.background = 'transparent'; };
+      leaveRow.onclick = (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        hostEmptyStartTime = null;
+        chrome.storage.local.remove('listenTogetherSession');
+        if (syncEngine) syncEngine.leaveRoom();
+        updatePlayerBarButton();
+        renderPopoverContent();
+        showSyncToast('Left Listen Together session');
+      };
+    }
+    return;
+  }
+
+  const roleBadge = document.getElementById('ytm-popover-role-badge');
+  if (roleBadge && roleBadge.textContent !== roleText) {
+    roleBadge.textContent = roleText;
+  }
+
+  const roomInput = document.getElementById('ytm-popover-room-input');
+  if (roomInput && roomInput.value !== roomId) {
+    roomInput.value = roomId;
+  }
+
+  if (popover.dataset.peerKey !== peerKey) {
+    popover.dataset.peerKey = peerKey;
+    const membersContainer = document.getElementById('ytm-popover-members');
+    if (membersContainer) {
+      membersContainer.innerHTML = membersHtml;
+    }
+  }
+
+  const driftContainer = document.getElementById('ytm-popover-drift');
+  if (driftContainer && driftContainer.textContent !== driftText) {
+    driftContainer.textContent = driftText;
+    driftContainer.style.display = driftText ? 'block' : 'none';
   }
 }
 
@@ -1582,7 +1804,12 @@ function cleanup() {
   lastSyncedVideoId = null;
   hostEmptyStartTime = null;
 
-  const popover = document.getElementById('ytm-sync-popover');
+  const guide = document.getElementById('ytm-listen-together-guide');
+  if (guide && guide.parentNode) {
+    guide.parentNode.removeChild(guide);
+  }
+
+  const popover = document.getElementById('ytm-listen-together-popover') || document.getElementById('ytm-sync-popover');
   if (popover && popover.parentNode) {
     popover.parentNode.removeChild(popover);
   }
@@ -1592,7 +1819,7 @@ function cleanup() {
     toast.parentNode.removeChild(toast);
   }
 
-  const btn = document.getElementById('ytm-listen-together-btn');
+  const btn = document.getElementById('ytm-listen-together-bar-btn') || document.getElementById('ytm-listen-together-btn');
   if (btn && btn.parentNode) {
     btn.parentNode.removeChild(btn);
   }
@@ -1941,7 +2168,10 @@ waitForYouTubeMusicReady(() => {
   restoreActiveSession();
   updateTrackInfo(true);
   updatePlayerBarButton();
+  setTimeout(checkAndShowListenTogetherGuide, 1500);
 });
+
+window.addEventListener('resize', positionListenTogetherGuide);
 
 navigationFinishListener = () => {
   lastSentTrack = null;
