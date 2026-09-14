@@ -709,7 +709,6 @@ function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, 
     source: 'ytm-sync-isolated',
     action: 'LOAD_VIDEO',
     videoId: videoId,
-    forceWatchNavigation: !hasActivePlayer,
     forceWatchNavigation: false,
     nextVideoId: nextVideoId || undefined,
     upcomingTracks: (Array.isArray(upcomingTracks) && upcomingTracks.length > 0) ? upcomingTracks : (latestPageBridgeUpcomingTracks.length > 0 ? latestPageBridgeUpcomingTracks : undefined),
@@ -719,20 +718,6 @@ function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, 
     currentTime: typeof currentTime === 'number' ? currentTime : 0,
     isPlaying: typeof isPlaying === 'boolean' ? isPlaying : true
   }, '*');
-
-  if (!isOnWatch || !hasActivePlayer) {
-    setTimeout(() => {
-      if (!window.location.pathname.startsWith('/watch')) {
-        console.log('[Listen Together] Page bridge did not navigate to /watch; forcing location.assign fallback');
-        const searchParams = new URLSearchParams();
-        searchParams.set('v', videoId);
-        if (typeof currentTime === 'number' && currentTime > 0) {
-          searchParams.set('t', Math.floor(currentTime));
-        }
-        window.location.assign(`/watch?${searchParams.toString()}`);
-      }
-    }, 4000);
-  }
 }
 
 function handleRemoteSyncAction(packet) {
