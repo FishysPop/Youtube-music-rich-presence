@@ -95,11 +95,47 @@ function extractRepeatMode(playerBarElement) {
   return 'NONE';
 }
 
-function formatLargeImageText(track, artist, album) {
-  if (album && typeof album === 'string' && album.trim()) {
-    return `${track} • ${album.trim()}`;
+function cleanTitleForComparison(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .toLowerCase()
+    .replace(/[\(\[][^\)\]]*(?:feat\.?|ft\.?|with|prod\.?|official|video|audio|remaster|version|deluxe|single|ep)[^\)\]]*[\)\]]/gi, '')
+    .replace(/\s*-\s*(?:single(?:\s+version)?|ep|deluxe(?:\s+edition)?|remastered|official(?:\s+audio|\s+video)?)\b.*$/gi, '')
+    .replace(/[^a-z0-9]/gi, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function isActualAlbum(track, album) {
+  if (!album || typeof album !== 'string' || !album.trim()) return false;
+  if (!track || typeof track !== 'string' || !track.trim()) return false;
+
+  const cleanAlbum = album.trim();
+  const cleanTrack = track.trim();
+
+  if (cleanAlbum.toLowerCase() === cleanTrack.toLowerCase()) {
+    return false;
   }
-  return `${track} - ${artist}`;
+
+  const normAlbum = cleanTitleForComparison(cleanAlbum);
+  const normTrack = cleanTitleForComparison(cleanTrack);
+
+  if (!normAlbum || !normTrack) {
+    return false;
+  }
+
+  if (normAlbum === normTrack) {
+    return false;
+  }
+
+  return true;
+}
+
+function formatLargeImageText(track, artist, album) {
+  if (isActualAlbum(track, album)) {
+    return album.trim();
+  }
+  return null;
 }
 
 function buildActivityButtons(track, artist, videoId, roomId, isHost) {
@@ -126,6 +162,8 @@ if (typeof module !== 'undefined' && module.exports) {
     extractMediaSessionInfo,
     parseBylineInfo,
     extractRepeatMode,
+    cleanTitleForComparison,
+    isActualAlbum,
     formatLargeImageText,
     buildActivityButtons
   };
@@ -281,6 +319,87 @@ function getCurrentVideoId() {
   return null;
 }
 
+function extractQueueTrackItem(it) {
+  if (!it || typeof it !== 'object') return null;
+
+  let r = it.playlistPanelVideoRenderer || null;
+  if (!r && it.playlistPanelVideoWrapperRenderer) {
+    const wrapper = it.playlistPanelVideoWrapperRenderer;
+    r = wrapper.primaryRenderer?.playlistPanelVideoRenderer ||
+        wrapper.primaryRenderer ||
+        wrapper.playlistPanelVideoRenderer ||
+        wrapper.counterpart?.[0]?.counterpartRenderer?.playlistPanelVideoRenderer ||
+        wrapper.counterpart?.[0]?.counterpartRenderer ||
+        null;
+  }
+  if (!r && it.musicResponsiveListItemRenderer) {
+    r = it.musicResponsiveListItemRenderer;
+  }
+  if (!r && (it.videoId || (it.navigationEndpoint?.watchEndpoint?.videoId))) {
+    r = it;
+  }
+
+  if (!r) return null;
+
+  const videoId = r.videoId ||
+                  r.playlistItemData?.videoId ||
+                  r.navigationEndpoint?.watchEndpoint?.videoId ||
+                  r.onTap?.watchEndpoint?.videoId ||
+                  it.videoId ||
+                  null;
+
+  if (!videoId || typeof videoId !== 'string' || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    return null;
+  }
+
+  function getText(obj) {
+    if (!obj) return '';
+    if (typeof obj === 'string') return obj;
+    if (Array.isArray(obj.runs)) {
+      return obj.runs.map(run => (run && typeof run.text === 'string') ? run.text : '').join('');
+    }
+    if (typeof obj.simpleText === 'string') return obj.simpleText;
+    return '';
+  }
+
+  const title = getText(r.title) ||
+                getText(r.headline) ||
+                getText(r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text) ||
+                '';
+
+  const artist = getText(r.shortBylineText) ||
+                 getText(r.longBylineText) ||
+                 getText(r.bylineText) ||
+                 getText(r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text) ||
+                 '';
+
+  const durationText = getText(r.lengthText) ||
+                       getText(r.durationText) ||
+                       getText(r.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text) ||
+                       '';
+
+  let thumbnail = null;
+  if (typeof r.thumbnail === 'string') {
+    thumbnail = r.thumbnail;
+  } else if (r.thumbnail?.thumbnails && Array.isArray(r.thumbnail.thumbnails) && r.thumbnail.thumbnails.length > 0) {
+    thumbnail = r.thumbnail.thumbnails[0]?.url || null;
+  }
+  if (!thumbnail && typeof r.albumArtUrl === 'string') {
+    thumbnail = r.albumArtUrl;
+  }
+  if (!thumbnail) {
+    thumbnail = `https://i.ytimg.com/vi/${videoId}/default.jpg`;
+  }
+
+  return {
+    videoId,
+    title: title.trim(),
+    artist: artist.trim(),
+    durationText: durationText.trim(),
+    thumbnail
+  };
+}
+
 function getCurrentTrackInfo() {
   try {
     const playerBar = document.querySelector('ytmusic-player-bar');
@@ -326,6 +445,29 @@ function getCurrentTrackInfo() {
       artist = bylineInfo.artist;
       album = bylineInfo.album;
 
+      if (albumArtElement && albumArtElement.src) {
+        if (albumArtElement.src.startsWith('//')) {
+          albumArtUrl = 'https:' + albumArtElement.src;
+        } else if (albumArtElement.src.startsWith('http')) {
+          albumArtUrl = albumArtElement.src;
+        }
+      }
+    }
+
+    if (!album) {
+      const artistElement = root.querySelector('.byline.style-scope.ytmusic-player-bar') || root.querySelector('yt-formatted-string.byline') || root.querySelector('.middle-controls .byline');
+      const bylineInfo = parseBylineInfo(artistElement);
+      if (bylineInfo.album && isActualAlbum(track, bylineInfo.album)) {
+        album = bylineInfo.album;
+      }
+    }
+
+    if (album && !isActualAlbum(track, album)) {
+      album = null;
+    }
+
+    if (!albumArtUrl) {
+      const albumArtElement = root.querySelector('img.image.style-scope.ytmusic-player-bar') || root.querySelector('.thumbnail-image-wrapper img') || root.querySelector('#thumbnail img');
       if (albumArtElement && albumArtElement.src) {
         if (albumArtElement.src.startsWith('//')) {
           albumArtUrl = 'https:' + albumArtElement.src;
@@ -404,17 +546,45 @@ function getCurrentTrackInfo() {
     let playlistIndex = null;
     let nextVideoId = null;
 
-    try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const list = urlParams.get('list');
-      if (list && typeof list === 'string') {
-        playlistId = list;
+    const bridgeList = document.documentElement.getAttribute('data-ytm-playlist-id');
+    if (bridgeList && /^[a-zA-Z0-9_-]+$/.test(bridgeList)) {
+      playlistId = bridgeList;
+    }
+    const bridgeIdx = document.documentElement.getAttribute('data-ytm-playlist-index');
+    if (bridgeIdx !== null && !isNaN(Number(bridgeIdx))) {
+      playlistIndex = parseInt(bridgeIdx, 10);
+    }
+
+    if (!playlistId && typeof latestPageBridgePlaylistId === 'string' && latestPageBridgePlaylistId) {
+      playlistId = latestPageBridgePlaylistId;
+    }
+    if (playlistIndex === null && typeof latestPageBridgePlaylistIndex === 'number' && latestPageBridgePlaylistIndex >= 0) {
+      playlistIndex = latestPageBridgePlaylistIndex;
+    }
+
+    if (!playlistId) {
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const list = urlParams.get('list');
+        if (list && typeof list === 'string' && /^[a-zA-Z0-9_-]+$/.test(list)) {
+          playlistId = list;
+        }
+        const idx = urlParams.get('index');
+        if (idx !== null && !isNaN(Number(idx))) {
+          playlistIndex = parseInt(idx, 10);
+        }
+      } catch (e) {}
+    }
+
+    if (!playlistId) {
+      const domLink = document.querySelector('ytmusic-player-page a[href*="list="], ytmusic-player-bar a[href*="list="], ytmusic-player-queue a[href*="list="]');
+      if (domLink && domLink.href) {
+        const m = domLink.href.match(/[?&]list=([a-zA-Z0-9_-]+)/);
+        if (m && m[1]) {
+          playlistId = m[1];
+        }
       }
-      const idx = urlParams.get('index');
-      if (idx !== null && !isNaN(Number(idx))) {
-        playlistIndex = parseInt(idx, 10);
-      }
-    } catch (e) {}
+    }
 
     const app = document.querySelector('ytmusic-app');
     if (playlistIndex === null && app && typeof app.getState === 'function') {
@@ -427,7 +597,13 @@ function getCurrentTrackInfo() {
     }
 
     const domItems = Array.from(document.querySelectorAll('ytmusic-player-queue-item'));
-    const currentIdx = domItems.findIndex(el => el.selected);
+    const currentIdx = domItems.findIndex(el =>
+      el.hasAttribute('selected') ||
+      el.classList.contains('selected') ||
+      el.selected ||
+      (videoId && extractQueueTrackItem(el.data)?.videoId === videoId) ||
+      Boolean(videoId && el.querySelector && el.querySelector(`a[href*="v=${videoId}"]`))
+    );
     if (playlistIndex === null && currentIdx !== -1) {
       playlistIndex = currentIdx;
     }
@@ -439,15 +615,43 @@ function getCurrentTrackInfo() {
         nextVideoId = upcomingTracks[0].videoId;
       }
     } else if (currentIdx !== -1 && domItems.length > currentIdx + 1) {
-      nextVideoId = (domItems[currentIdx + 1].data && domItems[currentIdx + 1].data.videoId) || null;
-      upcomingTracks = domItems.slice(currentIdx + 1, currentIdx + 16).map(el => {
-        const d = el.data || {};
-        return {
-          videoId: d.videoId,
-          title: d.title ? (d.title.runs ? d.title.runs[0].text : d.title.simpleText) : '',
-          artist: d.shortBylineText ? (d.shortBylineText.runs ? d.shortBylineText.runs[0].text : d.shortBylineText.simpleText) : ''
-        };
-      }).filter(it => it.videoId && /^[a-zA-Z0-9_-]{11}$/.test(it.videoId));
+      const upcoming = [];
+      for (let i = currentIdx + 1; i < domItems.length && upcoming.length < 15; i++) {
+        const el = domItems[i];
+        let item = extractQueueTrackItem(el.data);
+        if (!item) {
+          const titleEl = el.querySelector && el.querySelector('.song-title, yt-formatted-string.song-title, .title');
+          const artistEl = el.querySelector && el.querySelector('.byline, yt-formatted-string.byline, .subtitle');
+          const durEl = el.querySelector && el.querySelector('.duration, yt-formatted-string.duration, span.duration');
+          const imgEl = el.querySelector && el.querySelector('img.image, yt-img-shadow img, img');
+          const link = el.querySelector && el.querySelector('a[href*="v="], a.yt-simple-endpoint[href*="watch"]');
+          let vId = null;
+          if (link && link.href) {
+            const match = link.href.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+            if (match) vId = match[1];
+          }
+          if (!vId && imgEl && imgEl.src) {
+            const match = imgEl.src.match(/\/(?:vi|vi_webp)\/([a-zA-Z0-9_-]{11})\//);
+            if (match) vId = match[1];
+          }
+          if (vId) {
+            item = {
+              videoId: vId,
+              title: (titleEl ? titleEl.textContent : '').trim(),
+              artist: (artistEl ? artistEl.textContent : '').trim(),
+              durationText: (durEl ? durEl.textContent : '').trim(),
+              thumbnail: imgEl ? imgEl.src : `https://i.ytimg.com/vi/${vId}/default.jpg`
+            };
+          }
+        }
+        if (item && item.videoId) {
+          upcoming.push(item);
+        }
+      }
+      upcomingTracks = upcoming;
+      if (!nextVideoId && upcomingTracks.length > 0) {
+        nextVideoId = upcomingTracks[0].videoId;
+      }
     }
 
     return { track, artist, album, albumArtUrl, currentTime, duration, isPlaying, userIsSeeking, videoId, repeatMode, isAd, playlistId, playlistIndex, nextVideoId, upcomingTracks };
@@ -506,9 +710,17 @@ let userIsSeeking = false;
 // --- WebRTC Listen Together Engine Integration ---
 let syncEngine = null;
 let isRemoteSyncing = false;
+const suppression = {
+  play: 0,
+  pause: 0,
+  seek: 0,
+  pendingTrackId: null
+};
 let lastSyncedVideoId = null;
 let lastAppliedDriftMs = 0;
 let currentSessionStatus = 'idle';
+let lastConnectionError = null;
+let lastAttemptedRoomId = '';
 let localDiscordUserName = 'Anonymous';
 
 function escapeHtml(str) {
@@ -683,6 +895,9 @@ function formatTime(sec) {
 }
 
 let latestPageBridgeUpcomingTracks = [];
+let latestPageBridgePlaylistId = null;
+let latestPageBridgePlaylistIndex = null;
+let latestSessionUpcomingTracks = [];
 let lastBroadcastQueueHash = '';
 
 function checkAndBroadcastQueueUpdate() {
@@ -703,11 +918,288 @@ window.addEventListener('message', (event) => {
   if (event.source !== window || !event.data) return;
   if (event.data.source === 'ytm-page-bridge-log') {
     console.log(`[YTM Page Bridge] ${event.data.message}`);
-  } else if (event.data.source === 'ytm-page-bridge-queue' && Array.isArray(event.data.upcomingTracks)) {
-    latestPageBridgeUpcomingTracks = event.data.upcomingTracks.slice(0, 15);
+  } else if (event.data.source === 'ytm-page-bridge-queue') {
+    if (Array.isArray(event.data.upcomingTracks)) {
+      latestPageBridgeUpcomingTracks = event.data.upcomingTracks.slice(0, 15);
+    }
+    if (event.data.playlistId && typeof event.data.playlistId === 'string') {
+      latestPageBridgePlaylistId = event.data.playlistId;
+    }
+    if (typeof event.data.playlistIndex === 'number' && event.data.playlistIndex >= 0) {
+      latestPageBridgePlaylistIndex = event.data.playlistIndex;
+    }
     checkAndBroadcastQueueUpdate();
   }
 });
+
+function renderSessionQueuePanel() {
+  const panelId = 'ytm-session-queue-panel';
+  const styleId = 'ytm-session-queue-style';
+  const isListener = Boolean(syncEngine && syncEngine.role === 'LISTENER' && !syncEngine.isHost);
+  const hasTracks = Array.isArray(latestSessionUpcomingTracks) && latestSessionUpcomingTracks.length > 0;
+
+  let existingPanel = document.getElementById(panelId);
+  let styleEl = document.getElementById(styleId);
+
+  if (!isListener || !hasTracks) {
+    if (existingPanel) existingPanel.remove();
+    if (styleEl) styleEl.remove();
+    return;
+  }
+
+  const queueContainer = document.querySelector('ytmusic-player-queue') ||
+                         document.querySelector('#queue') ||
+                         document.querySelector('ytmusic-player-page #queue');
+  if (!queueContainer) return;
+
+  const contents = queueContainer.querySelector('#contents') || queueContainer.firstElementChild;
+
+  if (!existingPanel) {
+    existingPanel = document.createElement('div');
+    existingPanel.id = panelId;
+    existingPanel.style.cssText = 'width: 100%; box-sizing: border-box; background: transparent; border: none; margin: 0; padding: 0; font-family: Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;';
+
+    if (contents && contents.parentNode === queueContainer) {
+      if (contents.nextSibling) {
+        queueContainer.insertBefore(existingPanel, contents.nextSibling);
+      } else {
+        queueContainer.appendChild(existingPanel);
+      }
+    } else {
+      queueContainer.appendChild(existingPanel);
+    }
+  }
+
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = styleId;
+    styleEl.textContent = `
+      ytmusic-player-queue #contents ytmusic-player-queue-item:not([selected]):not(.selected) {
+        display: none !important;
+      }
+      .ytm-session-queue-row:hover {
+        background-color: rgba(255, 255, 255, 0.08) !important;
+      }
+    `;
+    document.head.appendChild(styleEl);
+  }
+
+  const hostName = (syncEngine && syncEngine.hostName) ? syncEngine.hostName : 'Host';
+  const trackItemsHtml = latestSessionUpcomingTracks.map((t) => {
+    const thumbUrl = t.albumArtUrl || t.thumbnail || (t.videoId ? `https://i.ytimg.com/vi/${t.videoId}/default.jpg` : '');
+    const thumbHtml = thumbUrl
+      ? `<img src="${escapeHtml(thumbUrl)}" style="width:40px; height:40px; border-radius:4px; object-fit:cover; margin-right:16px; flex-shrink:0; background:#1f1f1f;" />`
+      : `<div style="width:40px; height:40px; border-radius:4px; margin-right:16px; flex-shrink:0; background:#1f1f1f;"></div>`;
+
+    const dur = t.durationText || (typeof t.duration === 'number' && t.duration > 0 ? formatTime(t.duration) : '');
+    const durHtml = dur
+      ? `<div style="font-size:12px; font-weight:400; color:rgba(255, 255, 255, 0.7); margin-left:auto; padding-left:12px; flex-shrink:0; white-space:nowrap;">${escapeHtml(dur)}</div>`
+      : '';
+
+    return `
+      <div class="ytm-session-queue-row" style="display:flex; flex-direction:row; align-items:center; height:56px; padding:0 16px; cursor:default; transition:background-color 0.15s ease; user-select:none; box-sizing:border-box; border-radius:4px;">
+        ${thumbHtml}
+        <div style="display:flex; flex-direction:column; justify-content:center; min-width:0; flex:1;">
+          <div style="font-size:14px; font-weight:400; color:#ffffff; line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(t.title || 'Track')}</div>
+          <div style="font-size:12px; font-weight:400; color:rgba(255, 255, 255, 0.7); line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:3px;">${escapeHtml(t.artist || '')}</div>
+        </div>
+        ${durHtml}
+      </div>
+    `;
+  }).join('');
+
+  existingPanel.innerHTML = `
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:16px 16px 8px 16px; box-sizing:border-box;">
+      <span style="font-size:14px; font-weight:500; color:#ffffff; letter-spacing:0.1px;">Up next from ${escapeHtml(hostName)}</span>
+      <span style="font-size:12px; color:rgba(255, 255, 255, 0.7);">${latestSessionUpcomingTracks.length} song${latestSessionUpcomingTracks.length === 1 ? '' : 's'}</span>
+    </div>
+    <div style="width:100%; box-sizing:border-box;">
+      ${trackItemsHtml}
+    </div>
+  `;
+
+  disableAutoplayForConnectedClient();
+}
+
+function disableAutoplayForConnectedClient() {
+  const isListener = Boolean(syncEngine && syncEngine.role === 'LISTENER' && !syncEngine.isHost);
+  if (!isListener) return;
+
+  try {
+    const queueContainers = [
+      document.querySelector('ytmusic-player-queue'),
+      document.querySelector('ytmusic-player-page #queue'),
+      document.querySelector('#queue'),
+      document
+    ].filter(Boolean);
+
+    for (const container of queueContainers) {
+      const toggles = container.querySelectorAll(
+        'tp-yt-paper-toggle-button, paper-toggle-button'
+      );
+
+      for (const toggle of toggles) {
+        const parent = toggle.closest('ytmusic-player-queue-header-renderer') ||
+                       toggle.closest('#automix') ||
+                       toggle.closest('#automix-contents') ||
+                       toggle.closest('[class*="automix"]') ||
+                       toggle.closest('[class*="autoplay"]') ||
+                       toggle.parentElement;
+
+        const containerText = ((parent ? parent.textContent : '') + ' ' + (toggle.getAttribute('aria-label') || '')).toLowerCase();
+        const isAutoplay = containerText.includes('auto-play') ||
+                           containerText.includes('autoplay') ||
+                           containerText.includes('automix') ||
+                           containerText.includes('add similar content') ||
+                           toggle.id === 'automix-toggle' ||
+                           toggle.id === 'autoplay-toggle';
+
+        if (isAutoplay) {
+          const isChecked = Boolean(toggle.checked || toggle.hasAttribute('checked') || toggle.getAttribute('aria-pressed') === 'true');
+          if (isChecked) {
+            toggle.click();
+            if (toggle.checked) {
+              toggle.checked = false;
+              toggle.dispatchEvent(new CustomEvent('change', { bubbles: true }));
+            }
+            console.log('[Listen Together] Automatically turned off autoplay for connected client');
+          }
+        }
+      }
+    }
+  } catch (e) {}
+}
+
+function cmdNext() {
+  suppression.seek++;
+  suppression.play++;
+  const nextBtn = document.querySelector('ytmusic-player-bar .next-button button') ||
+                  document.querySelector('ytmusic-player-bar #next-button button') ||
+                  document.querySelector('ytmusic-player-bar .next-button');
+  if (nextBtn && typeof nextBtn.click === 'function') {
+    nextBtn.click();
+    return true;
+  }
+  return false;
+}
+
+function cmdPrevious() {
+  suppression.seek++;
+  suppression.play++;
+  const prevBtn = document.querySelector('ytmusic-player-bar .previous-button button') ||
+                  document.querySelector('ytmusic-player-bar #previous-button button') ||
+                  document.querySelector('ytmusic-player-bar .previous-button');
+  if (prevBtn && typeof prevBtn.click === 'function') {
+    prevBtn.click();
+    return true;
+  }
+  return false;
+}
+
+function cmdPlay(targetTime) {
+  const video = findVideoElement();
+  if (!video) return;
+  if (typeof targetTime === 'number') {
+    suppression.seek++;
+    video.currentTime = targetTime;
+  }
+  if (video.paused) {
+    suppression.play++;
+    video.play().catch(() => {
+      suppression.play = Math.max(0, suppression.play - 1);
+      setTimeout(() => {
+        const v = findVideoElement();
+        if (v && v.paused) {
+          suppression.play++;
+          v.play().catch(() => {
+            suppression.play = Math.max(0, suppression.play - 1);
+          });
+        }
+      }, 500);
+    });
+  }
+}
+
+function cmdPause() {
+  const video = findVideoElement();
+  if (!video || video.paused) return;
+  suppression.pause++;
+  const playPauseBtn = document.querySelector('ytmusic-player-bar #play-pause-button button') ||
+                       document.querySelector('#play-pause-button button');
+  if (playPauseBtn && typeof playPauseBtn.click === 'function') {
+    playPauseBtn.click();
+  } else {
+    video.pause();
+  }
+}
+
+function cmdSeek(targetTime) {
+  const video = findVideoElement();
+  if (!video || typeof targetTime !== 'number') return;
+  suppression.seek++;
+  video.currentTime = targetTime;
+}
+
+function cmdChangeTrack(videoId, currentTime) {
+  if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return;
+
+  const video = findVideoElement();
+  if (video && video.paused) {
+    video.play().catch(() => {});
+  }
+
+  suppression.pendingTrackId = videoId;
+  suppression.play++;
+  suppression.pause++;
+  suppression.seek++;
+
+  const onLoadedMetadata = (e) => {
+    if (!e || e.target instanceof HTMLMediaElement || e.target?.tagName === 'VIDEO') {
+      document.removeEventListener('loadedmetadata', onLoadedMetadata, true);
+      if (suppression.pendingTrackId === videoId) {
+        suppression.play = 0;
+        suppression.pause = 0;
+        suppression.seek = 0;
+        suppression.pendingTrackId = null;
+        isRemoteSyncing = false;
+        remoteNavigationPendingVideoId = null;
+      }
+    }
+  };
+  document.addEventListener('loadedmetadata', onLoadedMetadata, { capture: true });
+
+  setTimeout(() => {
+    document.removeEventListener('loadedmetadata', onLoadedMetadata, true);
+    if (suppression.pendingTrackId === videoId) {
+      suppression.play = 0;
+      suppression.pause = 0;
+      suppression.seek = 0;
+      suppression.pendingTrackId = null;
+      isRemoteSyncing = false;
+      remoteNavigationPendingVideoId = null;
+    }
+  }, 4000);
+
+  const startSec = Math.floor(currentTime || 0);
+  const watchEndpoint = { videoId };
+  if (startSec > 0) watchEndpoint.startTimeSeconds = startSec;
+
+  const endpointDetail = {
+    endpoint: {
+      clickTrackingParams: '',
+      watchEndpoint
+    }
+  };
+
+  const cloneFn = globalThis.cloneInto;
+  const payload = cloneFn ? cloneFn(endpointDetail, window) : endpointDetail;
+
+  document.dispatchEvent(new CustomEvent('yt-navigate', {
+    detail: payload,
+    bubbles: true,
+    composed: true
+  }));
+}
 
 function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, isPlaying, playlistId, playlistIndex, nextVideoId, upcomingTracks) {
   if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
@@ -721,47 +1213,19 @@ function navigateToVideo(videoId, trackTitle, artist, albumArtUrl, currentTime, 
   remoteNavigationPendingVideoId = videoId;
   lastTrackChangeTime = Date.now();
   isRemoteSyncing = true;
-  setTimeout(() => {
-    isRemoteSyncing = false;
-    remoteNavigationPendingVideoId = null;
-  }, 4500);
 
-  console.log(`[Listen Together] Posting LOAD_VIDEO to page-bridge for videoId: ${videoId}`);
   showSyncToast(`${trackTitle || 'Track'}${artist ? ' - ' + artist : ''}`);
 
-  const currentVid = getCurrentVideoId();
-  const video = findVideoElement();
-  const hasActivePlayer = Boolean(currentVid && video && (video.readyState > 0 || video.src));
-
-  if (!hasActivePlayer && !lastSyncedVideoId) {
-    if (syncEngine && syncEngine.role === 'LISTENER' && syncEngine.roomId) {
-      chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: syncEngine.roomId } });
-    }
-    const searchParams = new URLSearchParams();
-    searchParams.set('v', videoId);
-    if (typeof currentTime === 'number' && currentTime > 0) {
-      searchParams.set('t', Math.floor(currentTime));
-    }
-    const targetUrl = `/watch?${searchParams.toString()}`;
-    console.log(`[Listen Together] Direct watch navigation to: ${targetUrl}`);
-    window.location.assign(targetUrl);
-    return;
+  if (syncEngine && syncEngine.role === 'LISTENER' && syncEngine.roomId) {
+    chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: syncEngine.roomId } });
   }
 
-  console.log(`[Listen Together] Posting LOAD_VIDEO to page-bridge for videoId: ${videoId}`);
-  window.postMessage({
-    source: 'ytm-sync-isolated',
-    action: 'LOAD_VIDEO',
-    videoId: videoId,
-    forceWatchNavigation: false,
-    nextVideoId: nextVideoId || undefined,
-    upcomingTracks: (Array.isArray(upcomingTracks) && upcomingTracks.length > 0) ? upcomingTracks : (latestPageBridgeUpcomingTracks.length > 0 ? latestPageBridgeUpcomingTracks : undefined),
-    track: trackTitle,
-    artist: artist,
-    albumArtUrl: albumArtUrl,
-    currentTime: typeof currentTime === 'number' ? currentTime : 0,
-    isPlaying: typeof isPlaying === 'boolean' ? isPlaying : true
-  }, '*');
+  if (Array.isArray(upcomingTracks) && upcomingTracks.length > 0) {
+    latestSessionUpcomingTracks = upcomingTracks;
+    renderSessionQueuePanel();
+  }
+
+  cmdChangeTrack(videoId, currentTime);
 }
 
 function handleRemoteSyncAction(packet) {
@@ -777,14 +1241,24 @@ function handleRemoteSyncAction(packet) {
     return;
   }
 
+  const video = findVideoElement();
+  const clockOffset = (syncEngine && typeof syncEngine.clockOffset === 'number') ? syncEngine.clockOffset : 0;
+
   if (wasInAd) {
     wasInAd = false;
     showSyncToast('Ad finished - catching up with session...');
     if (lastAdTargetPacket) {
+      const targetTime = window.ytmCalculateAdCatchUpTime
+        ? window.ytmCalculateAdCatchUpTime(lastAdTargetPacket.currentTime, lastAdTargetPacket.timestamp, clockOffset)
+        : lastAdTargetPacket.currentTime;
+
       if (lastAdTargetPacket.videoId && (lastAdTargetPacket.videoId !== getCurrentVideoId() || lastAdTargetPacket.videoId !== lastSyncedVideoId)) {
-        console.log(`[Listen Together Listener] Catching up after ad: navigating to ${lastAdTargetPacket.videoId}`);
-        navigateToVideo(lastAdTargetPacket.videoId, lastAdTargetPacket.track, lastAdTargetPacket.artist, lastAdTargetPacket.albumArtUrl, lastAdTargetPacket.currentTime, lastAdTargetPacket.isPlaying, lastAdTargetPacket.playlistId, lastAdTargetPacket.playlistIndex, lastAdTargetPacket.nextVideoId);
+        console.log(`[Listen Together Listener] Catching up after ad: navigating to ${lastAdTargetPacket.videoId} at ${targetTime}s`);
+        navigateToVideo(lastAdTargetPacket.videoId, lastAdTargetPacket.track, lastAdTargetPacket.artist, lastAdTargetPacket.albumArtUrl, targetTime, lastAdTargetPacket.isPlaying, lastAdTargetPacket.playlistId, lastAdTargetPacket.playlistIndex, lastAdTargetPacket.nextVideoId, lastAdTargetPacket.upcomingTracks);
         return;
+      } else if (video && typeof targetTime === 'number') {
+        suppression.seek++;
+        video.currentTime = targetTime;
       }
     }
   }
@@ -794,6 +1268,8 @@ function handleRemoteSyncAction(packet) {
   }
 
   if (Array.isArray(packet.upcomingTracks) && packet.upcomingTracks.length > 0) {
+    latestSessionUpcomingTracks = packet.upcomingTracks;
+    renderSessionQueuePanel();
     window.postMessage({
       source: 'ytm-sync-isolated',
       action: 'SYNC_UPCOMING_TRACKS',
@@ -806,7 +1282,6 @@ function handleRemoteSyncAction(packet) {
   }
 
   const currentVid = getCurrentVideoId();
-  const video = findVideoElement();
   const hasActivePlayer = Boolean(currentVid && video && (video.readyState > 0 || video.src));
 
   const needsNavigation = Boolean(
@@ -829,7 +1304,7 @@ function handleRemoteSyncAction(packet) {
 
   if (!video) return;
 
-  const driftSec = window.ytmCalculateDrift ? window.ytmCalculateDrift(video.currentTime, packet) : 0;
+  const driftSec = window.ytmCalculateDrift ? window.ytmCalculateDrift(video.currentTime, packet, clockOffset) : 0;
   const driftMs = Math.round(driftSec * 1000);
   lastAppliedDriftMs = driftMs;
 
@@ -846,14 +1321,13 @@ function handleRemoteSyncAction(packet) {
     console.log(`[Listen Together] Listener playing (host is playing, drift: ${driftMs}ms)`);
     showSyncToast('Host resumed playback');
     isRemoteSyncing = true;
-    video.play().catch(() => {}).finally(() => {
-      setTimeout(() => { isRemoteSyncing = false; }, 200);
-    });
+    cmdPlay();
+    setTimeout(() => { isRemoteSyncing = false; }, 200);
   } else if (action.playPauseState === 'PAUSE' && !video.paused) {
     console.log(`[Listen Together] Listener pausing (host is paused, drift: ${driftMs}ms)`);
     showSyncToast('Host paused playback');
     isRemoteSyncing = true;
-    video.pause();
+    cmdPause();
     setTimeout(() => { isRemoteSyncing = false; }, 200);
   }
 
@@ -871,7 +1345,7 @@ function handleRemoteSyncAction(packet) {
       showSyncToast(`Host seeked to ${formatTime(action.targetTime)}`);
     }
     isRemoteSyncing = true;
-    video.currentTime = action.targetTime;
+    cmdSeek(action.targetTime);
     setTimeout(() => { isRemoteSyncing = false; }, 350);
   }
 }
@@ -888,6 +1362,8 @@ function handleRemoteTrackChange(packet) {
   }
 
   if (Array.isArray(packet.upcomingTracks) && packet.upcomingTracks.length > 0) {
+    latestSessionUpcomingTracks = packet.upcomingTracks;
+    renderSessionQueuePanel();
     window.postMessage({
       source: 'ytm-sync-isolated',
       action: 'SYNC_UPCOMING_TRACKS',
@@ -971,10 +1447,69 @@ function handlePeersChange(data) {
 }
 
 function handleConnectionStatusChange(status, roomId) {
+  if (currentSessionStatus === status && status === 'connected') {
+    return;
+  }
   currentSessionStatus = status;
   if (status === 'conflict_resolved' && roomId) {
     showSyncToast(`Room updated: ${roomId}`);
     renderPopoverContent();
+  } else if (status === 'connected') {
+    lastConnectionError = null;
+    showSyncToast(`Connected to session ${roomId}`);
+    renderPopoverContent();
+    disableAutoplayForConnectedClient();
+    window.postMessage({
+      source: 'ytm-sync-isolated',
+      action: 'SET_CLIENT_ROLE',
+      role: syncEngine ? syncEngine.role : 'NONE'
+    }, '*');
+  } else if (status === 'joining') {
+    lastConnectionError = null;
+    renderPopoverContent();
+    disableAutoplayForConnectedClient();
+    window.postMessage({
+      source: 'ytm-sync-isolated',
+      action: 'SET_CLIENT_ROLE',
+      role: syncEngine ? syncEngine.role : 'NONE'
+    }, '*');
+  } else if (status === 'timeout') {
+    currentSessionStatus = 'idle';
+    lastConnectionError = `Could not connect to room "${roomId}". Host is offline or room does not exist.`;
+    lastAttemptedRoomId = roomId;
+    chrome.storage.local.remove('listenTogetherSession');
+    latestSessionUpcomingTracks = [];
+    renderSessionQueuePanel();
+    showSyncToast(`Connection timed out: room "${roomId}" not found`);
+    renderPopoverContent();
+    window.postMessage({
+      source: 'ytm-sync-isolated',
+      action: 'SET_CLIENT_ROLE',
+      role: 'NONE'
+    }, '*');
+  } else if (status === 'host_disconnected') {
+    currentSessionStatus = 'idle';
+    lastConnectionError = `Host left session "${roomId || ''}".`.trim();
+    chrome.storage.local.remove('listenTogetherSession');
+    latestSessionUpcomingTracks = [];
+    renderSessionQueuePanel();
+    showSyncToast(`Host left the session`);
+    renderPopoverContent();
+    window.postMessage({
+      source: 'ytm-sync-isolated',
+      action: 'SET_CLIENT_ROLE',
+      role: 'NONE'
+    }, '*');
+  } else if (status === 'disconnected' || status === 'left') {
+    currentSessionStatus = 'idle';
+    latestSessionUpcomingTracks = [];
+    renderSessionQueuePanel();
+    renderPopoverContent();
+    window.postMessage({
+      source: 'ytm-sync-isolated',
+      action: 'SET_CLIENT_ROLE',
+      role: 'NONE'
+    }, '*');
   }
   updatePlayerBarButton();
   sendMessageToBackgroundScript({
@@ -1299,9 +1834,15 @@ function updatePlayerBarButton() {
   if (!btn) return;
 
   if (syncEngine && syncEngine.role !== 'NONE') {
-    btn.style.color = '#ffffff';
+    const isHost = syncEngine.isHost;
+    const isConnected = isHost || Boolean((syncEngine.connectionStatus === 'connected' || currentSessionStatus === 'connected') && syncEngine.hostPeerId);
+    btn.style.color = isConnected ? '#ffffff' : '#fbc02d';
+    btn.title = isConnected
+      ? (isHost ? 'Listen Together (Hosting)' : 'Listen Together (Synced)')
+      : 'Listen Together (Connecting...)';
   } else {
     btn.style.color = 'var(--ytmusic-icon-inactive, #909090)';
+    btn.title = 'Listen Together';
   }
 
   if (isPopoverOpen) {
@@ -1373,12 +1914,21 @@ function renderPopoverContent() {
   const popover = document.getElementById('ytm-listen-together-popover');
   if (!popover) return;
 
+  if (!document.getElementById('ytm-spin-style')) {
+    const spinStyle = document.createElement('style');
+    spinStyle.id = 'ytm-spin-style';
+    spinStyle.textContent = '@keyframes ytm-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }';
+    document.head.appendChild(spinStyle);
+  }
+
   const isSessionActive = Boolean(syncEngine && syncEngine.role !== 'NONE');
   const targetView = isSessionActive ? (syncEngine.isHost ? 'host' : 'listener') : 'idle';
 
   if (targetView === 'idle') {
+    const existingErrorBanner = document.getElementById('ytm-popover-error-banner');
+    const hasErrorChanged = Boolean(lastConnectionError) !== Boolean(existingErrorBanner);
     const existingJoinInput = document.getElementById('ytm-popover-join-input');
-    if (popover.dataset.view === 'idle' && existingJoinInput) {
+    if (popover.dataset.view === 'idle' && existingJoinInput && !hasErrorChanged) {
       return;
     }
 
@@ -1401,6 +1951,14 @@ function renderPopoverContent() {
           BETA
         </span>
       </div>
+      ${lastConnectionError ? `
+        <div id="ytm-popover-error-banner" style="margin:10px 16px 0 16px; padding:8px 10px; background:rgba(255, 78, 69, 0.12); border:1px solid rgba(255, 78, 69, 0.3); border-radius:4px; font-size:12px; color:#ff8983; line-height:1.4; display:flex; align-items:flex-start; gap:8px;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="flex-shrink:0; margin-top:1px;">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+          </svg>
+          <span>${escapeHtml(lastConnectionError)}</span>
+        </div>
+      ` : ''}
 
       <div id="ytm-popover-start-row" style="height:44px; padding:0 16px; display:flex; align-items:center; gap:16px; cursor:pointer; color:#ffffff; font-size:14px; font-weight:400; transition:background 0.1s;">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="color:rgba(255,255,255,0.7); display:block;">
@@ -1426,6 +1984,7 @@ function renderPopoverContent() {
       startRow.onmouseleave = () => { startRow.style.background = 'transparent'; };
       startRow.onclick = (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
+        lastConnectionError = null;
         dismissListenTogetherGuide();
         initSyncEngine();
         if (syncEngine) {
@@ -1444,12 +2003,22 @@ function renderPopoverContent() {
     const joinBtn = document.getElementById('ytm-popover-join-btn');
     const joinInput = document.getElementById('ytm-popover-join-input');
     if (joinBtn && joinInput) {
-      if (preservedValue) joinInput.value = preservedValue;
+      const initialValue = preservedValue || lastAttemptedRoomId || '';
+      if (initialValue) joinInput.value = initialValue;
       if (wasFocused) joinInput.focus();
+
+      joinInput.oninput = () => {
+        if (lastConnectionError) {
+          lastConnectionError = null;
+          const banner = document.getElementById('ytm-popover-error-banner');
+          if (banner) banner.remove();
+        }
+      };
 
       const handlePopoverJoin = () => {
         const code = parseSessionInput(joinInput.value);
         if (!code) return;
+        lastConnectionError = null;
         initSyncEngine();
         if (syncEngine) {
           if (syncEngine.isHost && syncEngine.roomId === code) {
@@ -1490,8 +2059,22 @@ function renderPopoverContent() {
   const roomId = syncEngine.roomId || '';
   const count = syncEngine.getConnectedPeerCount ? syncEngine.getConnectedPeerCount() : 0;
   const peerList = syncEngine.getConnectedPeerList ? syncEngine.getConnectedPeerList() : [];
-  const roleText = isHost ? (count > 0 ? 'Hosting' : 'Waiting') : 'Synced';
-  const peerKey = peerList.map(p => `${p.id || ''}:${p.name || ''}`).join(',');
+  const isConnected = isHost || Boolean(syncEngine && (syncEngine.connectionStatus === 'connected' || currentSessionStatus === 'connected') && syncEngine.hostPeerId);
+
+  let roleText = 'Connecting';
+  let badgeStyle = 'background:rgba(251, 192, 45, 0.15); color:#fbc02d;';
+  if (isHost) {
+    roleText = count > 0 ? 'Hosting' : 'Waiting';
+    badgeStyle = count > 0
+      ? 'background:rgba(43, 166, 64, 0.15); color:#2ba640;'
+      : 'background:rgba(255, 255, 255, 0.1); color:rgba(255, 255, 255, 0.7);';
+  } else if (isConnected) {
+    roleText = 'Synced';
+    badgeStyle = 'background:rgba(43, 166, 64, 0.15); color:#2ba640;';
+  }
+
+  const leaveButtonText = (!isHost && !isConnected) ? 'Cancel connection' : 'Leave session';
+  const peerKey = `${isConnected ? '1' : '0'}:${peerList.map(p => `${p.id || ''}:${p.name || ''}`).join(',')}:${(!isHost && isConnected) ? (syncEngine.hostName || '') : ''}`;
 
   let membersHtml = '';
   if (isHost) {
@@ -1501,6 +2084,18 @@ function renderPopoverContent() {
     } else {
       membersHtml = `<div style="padding:4px 16px 8px 16px; font-size:13px; color:rgba(255, 255, 255, 0.5);">Waiting for friends to join...</div>`;
     }
+  } else if (!isConnected) {
+    membersHtml = `
+      <div style="padding:6px 16px 10px 16px; display:flex; align-items:center; gap:10px;">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fbc02d" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="31.4" stroke-dashoffset="10" style="animation: ytm-spin 1s linear infinite; flex-shrink:0;">
+          <circle cx="12" cy="12" r="9.5"/>
+        </svg>
+        <div>
+          <div style="font-size:13px; font-weight:500; color:#ffffff;">Connecting to host...</div>
+          <div style="font-size:11px; color:rgba(255, 255, 255, 0.5); margin-top:2px;">Waiting for host in room ${escapeHtml(roomId)} to respond</div>
+        </div>
+      </div>
+    `;
   } else {
     const hostName = syncEngine.hostName || 'Host';
     membersHtml = `<div style="padding:4px 16px 4px 16px; font-size:13px; color:rgba(255, 255, 255, 0.7); line-height:1.4;"><strong style="color:#ffffff;">Host:</strong> ${escapeHtml(hostName)}</div>`;
@@ -1512,7 +2107,7 @@ function renderPopoverContent() {
     }
   }
 
-  const driftText = !isHost ? `Synced (${Math.abs(lastAppliedDriftMs)}ms drift)` : '';
+  const driftText = (!isHost && isConnected) ? `Synced (${Math.abs(lastAppliedDriftMs)}ms drift)` : '';
 
   if (popover.dataset.view !== targetView) {
     popover.dataset.view = targetView;
@@ -1527,7 +2122,7 @@ function renderPopoverContent() {
           </svg>
           <span style="font-weight:500; color:#ffffff; font-size:14px;">Listen Together</span>
         </div>
-        <span id="ytm-popover-role-badge" style="background:rgba(255, 255, 255, 0.1); color:rgba(255, 255, 255, 0.7); font-size:11px; font-weight:500; padding:2px 6px; border-radius:2px; text-transform:uppercase; letter-spacing:0.5px;">
+        <span id="ytm-popover-role-badge" style="font-size:11px; font-weight:500; padding:2px 6px; border-radius:2px; text-transform:uppercase; letter-spacing:0.5px; ${badgeStyle}">
           ${roleText}
         </span>
       </div>
@@ -1546,7 +2141,7 @@ function renderPopoverContent() {
         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block;">
           <path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
         </svg>
-        <span>Leave session</span>
+        <span id="ytm-popover-leave-text">${leaveButtonText}</span>
       </div>
     `;
 
@@ -1576,20 +2171,24 @@ function renderPopoverContent() {
       leaveRow.onmouseleave = () => { leaveRow.style.background = 'transparent'; };
       leaveRow.onclick = (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
+        const wasConnecting = (!isHost && !isConnected);
         hostEmptyStartTime = null;
         chrome.storage.local.remove('listenTogetherSession');
         if (syncEngine) syncEngine.leaveRoom();
         updatePlayerBarButton();
         renderPopoverContent();
-        showSyncToast('Left Listen Together session');
+        showSyncToast(wasConnecting ? 'Cancelled connection' : 'Left Listen Together session');
       };
     }
     return;
   }
 
   const roleBadge = document.getElementById('ytm-popover-role-badge');
-  if (roleBadge && roleBadge.textContent !== roleText) {
-    roleBadge.textContent = roleText;
+  if (roleBadge) {
+    if (roleBadge.textContent.trim() !== roleText) {
+      roleBadge.textContent = roleText;
+    }
+    roleBadge.style.cssText = `font-size:11px; font-weight:500; padding:2px 6px; border-radius:2px; text-transform:uppercase; letter-spacing:0.5px; ${badgeStyle}`;
   }
 
   const roomInput = document.getElementById('ytm-popover-room-input');
@@ -1603,6 +2202,11 @@ function renderPopoverContent() {
     if (membersContainer) {
       membersContainer.innerHTML = membersHtml;
     }
+  }
+
+  const leaveTextEl = document.getElementById('ytm-popover-leave-text');
+  if (leaveTextEl && leaveTextEl.textContent !== leaveButtonText) {
+    leaveTextEl.textContent = leaveButtonText;
   }
 
   const driftContainer = document.getElementById('ytm-popover-drift');
@@ -1693,6 +2297,7 @@ function joinListenerSession(roomId) {
       return;
     }
     hostEmptyStartTime = null;
+    lastConnectionError = null;
     chrome.storage.local.set({ listenTogetherSession: { role: 'LISTENER', roomId: normalizedId } });
     syncEngine.joinRoom(normalizedId);
     updatePlayerBarButton();
@@ -1807,6 +2412,13 @@ function attachVideoListeners() {
 }
 
 function onVideoSeeked() {
+  if (suppression.pendingTrackId !== null) {
+    return;
+  }
+  if (suppression.seek > 0) {
+    suppression.seek--;
+    return;
+  }
   updateTrackInfo(true);
   if (syncEngine && syncEngine.isHost && !isRemoteSyncing) {
     const video = findVideoElement();
@@ -1817,17 +2429,36 @@ function onVideoSeeked() {
 }
 
 function onVideoEvent(e) {
-  updateTrackInfo(true);
-
-  if (syncEngine && syncEngine.isHost && !isRemoteSyncing) {
-    const video = findVideoElement();
-    if (video) {
-      if (e && e.type === 'play') {
+  if (suppression.pendingTrackId !== null) {
+    return;
+  }
+  if (!e) return;
+  if (e.type === 'play') {
+    if (suppression.play > 0) {
+      suppression.play--;
+      return;
+    }
+    updateTrackInfo(true);
+    if (syncEngine && syncEngine.isHost && !isRemoteSyncing) {
+      const video = findVideoElement();
+      if (video) {
         syncEngine.notifyPlay(video.currentTime);
-      } else if (e && e.type === 'pause') {
+      }
+    }
+  } else if (e.type === 'pause') {
+    if (suppression.pause > 0) {
+      suppression.pause--;
+      return;
+    }
+    updateTrackInfo(true);
+    if (syncEngine && syncEngine.isHost && !isRemoteSyncing) {
+      const video = findVideoElement();
+      if (video) {
         syncEngine.notifyPause(video.currentTime);
       }
     }
+  } else {
+    updateTrackInfo(true);
   }
 }
 
@@ -1873,6 +2504,15 @@ function cleanup() {
   if (syncEngine) {
     syncEngine.leaveRoom();
     syncEngine = null;
+  }
+  latestSessionUpcomingTracks = [];
+  const sessionQueuePanel = document.getElementById('ytm-session-queue-panel');
+  if (sessionQueuePanel && sessionQueuePanel.parentNode) {
+    sessionQueuePanel.parentNode.removeChild(sessionQueuePanel);
+  }
+  const sessionQueueStyle = document.getElementById('ytm-session-queue-style');
+  if (sessionQueueStyle && sessionQueueStyle.parentNode) {
+    sessionQueueStyle.parentNode.removeChild(sessionQueueStyle);
   }
   lastSyncedVideoId = null;
   hostEmptyStartTime = null;
@@ -1951,14 +2591,19 @@ function updateTrackInfo(forceSend = false) {
         if (lastAdTargetPacket && lastAdTargetPacket.videoId) {
           const currentVid = getCurrentVideoId();
           if (lastAdTargetPacket.videoId !== currentVid || lastAdTargetPacket.videoId !== lastSyncedVideoId) {
-            console.log(`[Listen Together Listener] Catching up after ad in updateTrackInfo: navigating to ${lastAdTargetPacket.videoId}`);
+            const clockOffset = (syncEngine && typeof syncEngine.clockOffset === 'number') ? syncEngine.clockOffset : 0;
+            const targetTime = window.ytmCalculateAdCatchUpTime
+              ? window.ytmCalculateAdCatchUpTime(lastAdTargetPacket.currentTime, lastAdTargetPacket.timestamp, clockOffset)
+              : lastAdTargetPacket.currentTime;
+
+            console.log(`[Listen Together Listener] Catching up after ad in updateTrackInfo: navigating to ${lastAdTargetPacket.videoId} at ${targetTime}s`);
             showSyncToast('Ad finished - catching up with session...');
             navigateToVideo(
               lastAdTargetPacket.videoId,
               lastAdTargetPacket.track,
               lastAdTargetPacket.artist,
               lastAdTargetPacket.albumArtUrl,
-              lastAdTargetPacket.currentTime,
+              targetTime,
               lastAdTargetPacket.isPlaying,
               lastAdTargetPacket.playlistId,
               lastAdTargetPacket.playlistIndex,
@@ -2042,6 +2687,8 @@ function updateTrackInfo(forceSend = false) {
             console.log(`[Listen Together] User manually selected a different track ("${currentTrackInfo.track}"). Leaving Listen Together session.`);
             chrome.storage.local.remove('listenTogetherSession');
             syncEngine.leaveRoom();
+            latestSessionUpcomingTracks = [];
+            renderSessionQueuePanel();
             lastSyncedVideoId = null;
             updatePlayerBarButton();
             showSyncToast('Left Listen Together session (changed track)');
@@ -2263,6 +2910,8 @@ navigationFinishListener = () => {
   pauseGracePeriodExpired = false;
   checkUrlSession();
   updateTrackInfo(true);
+  updateTrackInfo(false);
+  disableAutoplayForConnectedClient();
 };
 
 window.addEventListener('yt-navigate-finish', navigationFinishListener);
@@ -2294,13 +2943,15 @@ periodicInterval = setInterval(() => {
     wasInAd = false;
     showSyncToast('Ad finished - catching up with session...');
     if (lastAdTargetPacket.videoId && lastAdTargetPacket.videoId !== getCurrentVideoId()) {
-      navigateToVideo(lastAdTargetPacket.videoId, lastAdTargetPacket.track, lastAdTargetPacket.artist, lastAdTargetPacket.albumArtUrl, lastAdTargetPacket.currentTime, lastAdTargetPacket.isPlaying);
+      navigateToVideo(lastAdTargetPacket.videoId, lastAdTargetPacket.track, lastAdTargetPacket.artist, lastAdTargetPacket.albumArtUrl, lastAdTargetPacket.currentTime, lastAdTargetPacket.isPlaying, lastAdTargetPacket.playlistId, lastAdTargetPacket.playlistIndex, lastAdTargetPacket.nextVideoId, lastAdTargetPacket.upcomingTracks);
     }
   }
   attachVideoListeners();
   updateTrackInfo();
   updatePlayerBarButton();
   checkAutoStopIdleHosting();
+  renderSessionQueuePanel();
+  disableAutoplayForConnectedClient();
 }, 1000);
 
 window.__ytmRpcCleanup = cleanup;

@@ -11,6 +11,8 @@ const {
     sanitizePacket,
     generateRoomCode,
     validateVideoId,
+    calculateAdCatchUpTime,
+    isNearTrackEnd,
     WebRtcSyncEngine
 } = require('../extention/webrtc-sync.js');
 
@@ -272,33 +274,37 @@ test('calculateDrift does not advance host time when host is paused', () => {
 });
 
 // 5. 3-Tier Adaptive Speed Adjustment & Sync Action Tests
-test('determineSyncAction: Perfect sync when drift < DRIFT_TOLERANCE_MS', () => {
-    // 50ms drift (< 150ms tolerance)
-    const action = determineSyncAction(50, true, true, 30.0);
-    assert.strictEqual(action.action, 'NONE');
-    assert.strictEqual(action.playbackRate, 1.0);
+test('determineSyncAction: Perfect sync when drift < DRIFT_TOLERANCE_MS (2500ms)', () => {
+    // 500ms and 1500ms drift (< 2500ms tolerance) produces NONE to prevent micro-stutter
+    const action1 = determineSyncAction(500, true, true, 30.0);
+    assert.strictEqual(action1.action, 'NONE');
+    assert.strictEqual(action1.playbackRate, 1.0);
+
+    const action2 = determineSyncAction(1800, true, true, 30.0);
+    assert.strictEqual(action2.action, 'NONE');
+    assert.strictEqual(action2.playbackRate, 1.0);
 });
 
-test('determineSyncAction: Soft speed-up when follower is behind (150ms - 1200ms)', () => {
-    // Follower is 400ms behind host (drift = +400ms)
-    const action = determineSyncAction(400, true, true, 30.0);
+test('determineSyncAction: Soft speed-up when follower is behind (2500ms - 5000ms)', () => {
+    // Follower is 3500ms behind host (drift = +3500ms)
+    const action = determineSyncAction(3500, true, true, 30.0);
     assert.strictEqual(action.action, 'SOFT_SPEED_UP');
     assert.strictEqual(action.playbackRate, 1.05);
 });
 
-test('determineSyncAction: Soft slow-down when follower is ahead (-150ms to -1200ms)', () => {
-    // Follower is 500ms ahead of host (drift = -500ms)
-    const action = determineSyncAction(-500, true, true, 30.0);
+test('determineSyncAction: Soft slow-down when follower is ahead (-2500ms to -5000ms)', () => {
+    // Follower is 3500ms ahead of host (drift = -3500ms)
+    const action = determineSyncAction(-3500, true, true, 30.0);
     assert.strictEqual(action.action, 'SOFT_SLOW_DOWN');
     assert.strictEqual(action.playbackRate, 0.95);
 });
 
-test('determineSyncAction: Hard seek when drift > HARD_SEEK_THRESHOLD_MS (e.g. 3000ms)', () => {
-    // Follower is 3000ms behind (e.g. host scrubbed ahead)
-    const action = determineSyncAction(3000, true, true, 30.0);
+test('determineSyncAction: Hard seek when drift > HARD_SEEK_THRESHOLD_MS (e.g. 6000ms)', () => {
+    // Follower is 6000ms behind
+    const action = determineSyncAction(6000, true, true, 30.0);
     assert.strictEqual(action.action, 'HARD_SEEK');
     assert.strictEqual(action.playbackRate, 1.0);
-    assert.strictEqual(action.targetTime, 33.0);
+    assert.strictEqual(action.targetTime, 36.0);
 });
 
 test('determineSyncAction: uses gradual speed-up instead of hard seek when preferSpeedAdjustment is true for drift <= 5000ms', () => {
@@ -741,5 +747,313 @@ test('Pure Broker Relay: Operates entirely without RTCPeerConnection or STUN que
     listener.leaveRoom();
 });
 
+// 15. Clock Sync Packet Sanitization Test
+test('sanitizePacket permits CLOCK_PING and CLOCK_PONG packets with clientTime and hostTime', () => {
+    const pingPacket = {
+        type: 'CLOCK_PING',
+        clientTime: 1700000000000,
+        peerId: 'peer-abc',
+        targetPeerId: 'peer-host'
+    };
+    const sanitizedPing = sanitizePacket(pingPacket);
+    assert.notStrictEqual(sanitizedPing, null);
+    assert.strictEqual(sanitizedPing.type, 'CLOCK_PING');
+    assert.strictEqual(sanitizedPing.clientTime, 1700000000000);
+    assert.strictEqual(sanitizedPing.peerId, 'peer-abc');
+    assert.strictEqual(sanitizedPing.targetPeerId, 'peer-host');
+
+    const pongPacket = {
+        type: 'CLOCK_PONG',
+        clientTime: 1700000000000,
+        hostTime: 1700000000050,
+        peerId: 'peer-host',
+        targetPeerId: 'peer-abc'
+    };
+    const sanitizedPong = sanitizePacket(pongPacket);
+    assert.notStrictEqual(sanitizedPong, null);
+    assert.strictEqual(sanitizedPong.type, 'CLOCK_PONG');
+    assert.strictEqual(sanitizedPong.clientTime, 1700000000000);
+    assert.strictEqual(sanitizedPong.hostTime, 1700000000050);
+});
+
+// 16. Drift Calculation with Clock Skew Compensation Test
+test('calculateDrift normalizes timestamps using clockOffset', () => {
+    // Scenario: Host system clock is 2000ms AHEAD of listener system clock.
+    // Host sends packet with timestamp 1002000 (its local time) and currentTime 50.0s.
+    // Listener receives it when listener local time is 1000050.
+    // Transit latency was 50ms.
+    // Without clockOffset compensation, expectedHostTime would be 50.0 + (1000050 - 1002000)/1000 = 50.0 - 1.95s = 48.05s (completely wrong!).
+    // With clockOffset = +2000ms: normalizedNow = 1000050 + 2000 = 1002050.
+    // transitLatencySec = (1002050 - 1002000)/1000 = 0.05s.
+    // expectedHostTime = 50.0 + 0.05 = 50.05s.
+    // Listener is at 50.0s, so drift = +0.05s (+50ms).
+    const packet = {
+        currentTime: 50.0,
+        isPlaying: true,
+        playbackRate: 1.0,
+        timestamp: 1002000
+    };
+    const driftSec = calculateDrift(50.0, packet, 1000050, 2000);
+    assert.strictEqual(Math.round(driftSec * 1000), 50);
+});
+
+// 17. Ad Catch-Up Time Calculation Test
+test('calculateAdCatchUpTime extrapolates current host playback position after ad', () => {
+    // Host packet sent at timestamp 1000000 with currentTime = 10.0s, isPlaying: true.
+    // Listener finished an ad at localNow = 1015000 (15 seconds later).
+    // Clock offset = 0.
+    // Expected target catch up time = 10.0 + 15.0 = 25.0s.
+    const packet = {
+        currentTime: 10.0,
+        isPlaying: true,
+        timestamp: 1000000
+    };
+    const catchUpSec = calculateAdCatchUpTime(packet, 1015000, 0);
+    assert.strictEqual(catchUpSec, 25.0);
+
+    // When host was paused during packet, catch up time does not advance
+    const pausedPacket = {
+        currentTime: 10.0,
+        isPlaying: false,
+        timestamp: 1000000
+    };
+    const pausedCatchUpSec = calculateAdCatchUpTime(pausedPacket, 1015000, 0);
+    assert.strictEqual(pausedCatchUpSec, 10.0);
+});
+
+// 18. Near-End Auto-Advance Trigger Test
+test('isNearTrackEnd detects when playback is within threshold of duration', () => {
+    // Track duration is 180s.
+    assert.strictEqual(isNearTrackEnd(179.7, 180.0, 0.4), true);
+    assert.strictEqual(isNearTrackEnd(178.0, 180.0, 0.4), false);
+    assert.strictEqual(isNearTrackEnd(0, 0, 0.4), false);
+});
+
+// 19. P2P Clock Sync Handshake in WebRtcSyncEngine Test
+test('WebRtcSyncEngine: Host answers CLOCK_PING with CLOCK_PONG and Listener calculates median offset', async () => {
+    const host = new WebRtcSyncEngine();
+    host.createRoom('YTM-CLOCK1');
+
+    let sentPacket = null;
+    host.publishMqttPacket = (pkt) => { sentPacket = pkt; };
+
+    // Listener sends CLOCK_PING to host
+    await host.handleSignalMessage({
+        type: 'CLOCK_PING',
+        clientTime: 1000000,
+        peerId: 'peer-listener-1',
+        targetPeerId: host.peerId
+    });
+
+    assert.notStrictEqual(sentPacket, null);
+    assert.strictEqual(sentPacket.type, 'CLOCK_PONG');
+    assert.strictEqual(sentPacket.clientTime, 1000000);
+    assert.strictEqual(typeof sentPacket.hostTime, 'number');
+    assert.strictEqual(sentPacket.targetPeerId, 'peer-listener-1');
+
+    const listener = new WebRtcSyncEngine();
+    listener.joinRoom('YTM-CLOCK1');
+    listener.hostPeerId = host.peerId;
+
+    // Simulate listener receiving 3 pong samples
+    // Sample 1: clientTime = 1000000, hostTime = 1001020, receiveTime = 1000040 (RTT 40ms, oneWay 20ms -> offset = 1001020 - 1000000 - 20 = 1000ms)
+    listener.handleClockPong({ clientTime: 1000000, hostTime: 1001020 }, 1000040);
+    assert.strictEqual(listener.clockOffset, 1000);
+
+    // Sample 2: offset = 1020ms
+    listener.handleClockPong({ clientTime: 1001000, hostTime: 1002040 }, 1001040);
+    // Median of [1000, 1020] = (1000 + 1020)/2 = 1010ms
+    assert.strictEqual(listener.clockOffset, 1010);
+
+    // Sample 3: offset = 990ms
+    listener.handleClockPong({ clientTime: 1002000, hostTime: 1003010 }, 1002040);
+    // Sorted: [990, 1000, 1020] -> median is 1000ms
+    assert.strictEqual(listener.clockOffset, 1000);
+
+    host.leaveRoom();
+    listener.leaveRoom();
+});
+
+test('WebRtcSyncEngine: joinRoom starts connection timeout and transitions to timeout when host does not respond', async () => {
+    let lastStatus = null;
+    let statusRoomId = null;
+
+    const engine = new WebRtcSyncEngine({
+        connectionTimeoutMs: 50,
+        onConnectionStatus: (status, roomId) => {
+            lastStatus = status;
+            statusRoomId = roomId;
+        }
+    });
+
+    engine.joinRoom('YTM-GHOST1');
+    assert.strictEqual(engine.role, 'LISTENER');
+    assert.strictEqual(engine.connectionStatus, 'connecting');
+    assert.strictEqual(lastStatus, 'joining');
+
+    await new Promise(r => setTimeout(r, 80));
+
+    assert.strictEqual(lastStatus, 'timeout');
+    assert.strictEqual(statusRoomId, 'YTM-GHOST1');
+    assert.strictEqual(engine.role, 'NONE');
+    assert.strictEqual(engine.roomId, null);
+    assert.strictEqual(engine.connectionStatus, 'disconnected');
+});
+
+test('WebRtcSyncEngine: receiving host signal clears connection timeout and transitions to connected', async () => {
+    let lastStatus = null;
+
+    const engine = new WebRtcSyncEngine({
+        connectionTimeoutMs: 80,
+        onConnectionStatus: (status) => {
+            lastStatus = status;
+        }
+    });
+
+    engine.joinRoom('YTM-LIVE99');
+    assert.strictEqual(engine.connectionStatus, 'connecting');
+
+    // Simulate receiving ROOM_INFO from host within the timeout window
+    await engine.handleSignalMessage({
+        type: 'ROOM_INFO',
+        peerId: 'host-peer-1',
+        roomId: 'YTM-LIVE99',
+        hostName: 'Alice'
+    });
+
+    assert.strictEqual(engine.connectionStatus, 'connected');
+    assert.strictEqual(engine.hostPeerId, 'host-peer-1');
+    assert.strictEqual(engine.hostName, 'Alice');
+    assert.strictEqual(lastStatus, 'connected');
+
+    // Wait past the original 80ms timeout window to ensure timeout was cancelled
+    await new Promise(r => setTimeout(r, 100));
+    assert.strictEqual(engine.connectionStatus, 'connected');
+    assert.strictEqual(lastStatus, 'connected');
+
+    engine.leaveRoom();
+});
+
+test('WebRtcSyncEngine: host inactivity triggers host_disconnected and cleans up listener', () => {
+    let lastStatus = null;
+    let statusRoomId = null;
+
+    const engine = new WebRtcSyncEngine({
+        onConnectionStatus: (status, roomId) => {
+            lastStatus = status;
+            statusRoomId = roomId;
+        }
+    });
+
+    engine.joinRoom('YTM-ACTIVE1');
+    engine.connectionStatus = 'connected';
+    engine.hostPeerId = 'host-1';
+    engine.hostName = 'Bob';
+
+    // Simulate 12 seconds of host silence
+    engine.lastHostActivity = Date.now() - 12000;
+    engine.checkHostLiveness();
+
+    assert.strictEqual(lastStatus, 'host_disconnected');
+    assert.strictEqual(statusRoomId, 'YTM-ACTIVE1');
+    assert.strictEqual(engine.connectionStatus, 'disconnected');
+    assert.strictEqual(engine.role, 'NONE');
+});
+
+test('WebRtcSyncEngine: does not broadcast PEER_JOIN when checking liveness while host is active', () => {
+    const published = [];
+    const engine = new WebRtcSyncEngine({});
+    engine.publishMqttPacket = (pkt) => published.push(pkt);
+
+    engine.joinRoom('YTM-ALIVE1');
+    engine.connectionStatus = 'connected';
+    engine.hostPeerId = 'host-1';
+    engine.hostName = 'Bob';
+    published.length = 0;
+
+    engine.lastHostActivity = Date.now() - 2000;
+    engine.checkHostLiveness();
+
+    const peerJoins = published.filter(p => p.type === 'PEER_JOIN');
+    assert.strictEqual(peerJoins.length, 0);
+    assert.strictEqual(engine.connectionStatus, 'connected');
+
+    engine.leaveRoom();
+});
+
+test('WebRtcSyncEngine: transitions to connected and fires onConnectionStatus exactly once across multiple host signals', async () => {
+    const statusCalls = [];
+    const engine = new WebRtcSyncEngine({
+        onConnectionStatus: (status, roomId) => {
+            statusCalls.push({ status, roomId });
+        }
+    });
+
+    engine.joinRoom('YTM-MULTI1');
+    assert.strictEqual(statusCalls.length, 1);
+    assert.strictEqual(statusCalls[0].status, 'joining');
+
+    await engine.handleSignalMessage({
+        type: 'ROOM_INFO',
+        peerId: 'host-1',
+        roomId: 'YTM-MULTI1',
+        hostName: 'Alice'
+    });
+
+    await engine.handleSignalMessage({
+        type: 'SYNC_STATE',
+        peerId: 'host-1',
+        roomId: 'YTM-MULTI1',
+        track: 'Song A',
+        videoId: 'otKN6C8LFzQ',
+        currentTime: 10,
+        isPlaying: true
+    });
+
+    await engine.handleSignalMessage({
+        type: 'HEARTBEAT',
+        peerId: 'host-1',
+        roomId: 'YTM-MULTI1',
+        track: 'Song A',
+        videoId: 'otKN6C8LFzQ',
+        currentTime: 11,
+        isPlaying: true
+    });
+
+    await engine.handleSignalMessage({
+        type: 'SYNC_STATE',
+        peerId: 'host-1',
+        roomId: 'YTM-MULTI1',
+        track: 'Song A',
+        videoId: 'otKN6C8LFzQ',
+        currentTime: 12,
+        isPlaying: true
+    });
+
+    const connectedCalls = statusCalls.filter(c => c.status === 'connected');
+    assert.strictEqual(connectedCalls.length, 1);
+    assert.strictEqual(connectedCalls[0].roomId, 'YTM-MULTI1');
+    assert.strictEqual(engine.connectionStatus, 'connected');
+
+    engine.leaveRoom();
+});
+
+test('WebRtcSyncEngine: setUserName does not broadcast PEER_JOIN if username is unchanged', () => {
+    const published = [];
+    const engine = new WebRtcSyncEngine({});
+    engine.publishMqttPacket = (pkt) => published.push(pkt);
+
+    engine.joinRoom('YTM-NAME1');
+    engine.setUserName('Alice');
+    published.length = 0;
+
+    engine.setUserName('Alice');
+    const peerJoins = published.filter(p => p.type === 'PEER_JOIN');
+    assert.strictEqual(peerJoins.length, 0);
+
+    engine.leaveRoom();
+});
+
 runAllTests();
+
 

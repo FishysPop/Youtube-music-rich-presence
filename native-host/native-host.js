@@ -177,9 +177,27 @@ async function setActivity(activityData) {
         return;
     }
 
+    const normalized = { ...activityData };
+    if ((!normalized.partyId || normalized.partySize === undefined) && normalized.party && typeof normalized.party === 'object') {
+        if (!normalized.partyId && typeof normalized.party.id === 'string') {
+            normalized.partyId = normalized.party.id;
+        }
+        if (normalized.partySize === undefined && normalized.partyMax === undefined && Array.isArray(normalized.party.size) && normalized.party.size.length === 2) {
+            normalized.partySize = normalized.party.size[0];
+            normalized.partyMax = normalized.party.size[1];
+        }
+        delete normalized.party;
+    }
+    if (Array.isArray(normalized.buttons) && normalized.buttons.length > 2) {
+        normalized.buttons = normalized.buttons.slice(0, 2);
+    }
+    if (!normalized.largeImageText || (typeof normalized.largeImageText === 'string' && !normalized.largeImageText.trim())) {
+        delete normalized.largeImageText;
+    }
+
     try {
-        await rpc.user.setActivity(activityData);
-        sendToExtension({ type: 'ACTIVITY_STATUS', status: 'success', activity: activityData });
+        await rpc.user.setActivity(normalized);
+        sendToExtension({ type: 'ACTIVITY_STATUS', status: 'success', activity: normalized });
     } catch (err) {
         sendToExtension({ type: 'ACTIVITY_STATUS', status: 'error', message: `Failed to set activity: ${err.message}` });
     }

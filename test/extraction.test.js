@@ -6,6 +6,7 @@ const {
     parseBylineInfo,
     extractRepeatMode,
     formatLargeImageText,
+    isActualAlbum,
     buildActivityButtons
 } = require('../extention/content.js');
 
@@ -167,6 +168,34 @@ test('formatLargeImageText includes album when available, otherwise track and ar
     assert.strictEqual(formatLargeImageText('Harder Better Faster Stronger', 'Daft Punk', 'Discovery'), 'Harder Better Faster Stronger • Discovery');
     assert.strictEqual(formatLargeImageText('Song Without Album', 'Some Artist', null), 'Song Without Album - Some Artist');
     assert.strictEqual(formatLargeImageText('Song Without Album', 'Some Artist', ''), 'Song Without Album - Some Artist');
+test('formatLargeImageText includes only album when actual album is present, otherwise null', () => {
+    assert.strictEqual(formatLargeImageText('Harder Better Faster Stronger', 'Daft Punk', 'Discovery'), 'Discovery');
+    assert.strictEqual(formatLargeImageText('Sound Of You Laughing', 'ThxSoMch', 'Sound Of You Laughing'), null);
+    assert.strictEqual(formatLargeImageText('Sound Of You Laughing (feat. Flawed Mangoes)', 'ThxSoMch', 'Sound Of You Laughing'), null);
+    assert.strictEqual(formatLargeImageText('Song Without Album', 'Some Artist', null), null);
+    assert.strictEqual(formatLargeImageText('Song Without Album', 'Some Artist', ''), null);
+});
+
+test('isActualAlbum distinguishes genuine albums from single releases repeating the track title', () => {
+    assert.strictEqual(isActualAlbum('Blinding Lights', 'After Hours'), true);
+    assert.strictEqual(isActualAlbum('Harder Better Faster Stronger', 'Discovery'), true);
+    assert.strictEqual(isActualAlbum('Hello', '25'), true);
+
+    assert.strictEqual(isActualAlbum('Sound Of You Laughing', 'Sound Of You Laughing'), false);
+    assert.strictEqual(isActualAlbum('Sound Of You Laughing', 'sound of you laughing'), false);
+    assert.strictEqual(isActualAlbum('Sound Of You Laughing (feat. Flawed Mangoes)', 'Sound Of You Laughing'), false);
+    assert.strictEqual(isActualAlbum('Sound Of You Laughing [with Flawed Mangoes]', 'Sound Of You Laughing'), false);
+    assert.strictEqual(isActualAlbum('Sound Of You Laughing', 'Sound Of You Laughing - Single'), false);
+    assert.strictEqual(isActualAlbum('Sound Of You Laughing', 'Sound Of You Laughing (Single)'), false);
+    assert.strictEqual(isActualAlbum('Sound Of You Laughing', 'Sound Of You Laughing - EP'), false);
+    assert.strictEqual(isActualAlbum('Song [Official Music Video]', 'Song'), false);
+    assert.strictEqual(isActualAlbum('Song (Remastered 2021)', 'Song'), false);
+
+    assert.strictEqual(isActualAlbum('Song', null), false);
+    assert.strictEqual(isActualAlbum('Song', ''), false);
+    assert.strictEqual(isActualAlbum('Song', '   '), false);
+    assert.strictEqual(isActualAlbum(null, 'Album'), false);
+    assert.strictEqual(isActualAlbum('', 'Album'), false);
 });
 
 test('buildActivityButtons uses direct video link when videoId is valid', () => {
@@ -188,6 +217,33 @@ test('buildActivityButtons includes Listen Together button when hosting session'
     assert.strictEqual(buttons[0].url, 'https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=YTM-ABC123');
     assert.strictEqual(buttons[1].label, 'Link');
     assert.strictEqual(buttons[1].url, 'https://music.youtube.com/watch?v=5NV6Rdv1a3I');
+});
+
+test('single release metadata does not trigger redundant album change updates', () => {
+    const track = 'Sound Of You Laughing';
+    const initialAlbum = null;
+    const delayedAlbumArrival = 'Sound Of You Laughing';
+
+    const cleanInitial = isActualAlbum(track, initialAlbum) ? initialAlbum : null;
+    const cleanDelayed = isActualAlbum(track, delayedAlbumArrival) ? delayedAlbumArrival : null;
+
+    assert.strictEqual(cleanInitial, null);
+    assert.strictEqual(cleanDelayed, null);
+    assert.strictEqual(cleanInitial !== cleanDelayed, false);
+});
+
+test('distinct album metadata triggers update and sets clean album text', () => {
+    const track = 'Blinding Lights';
+    const initialAlbum = null;
+    const delayedAlbumArrival = 'After Hours';
+
+    const cleanInitial = isActualAlbum(track, initialAlbum) ? initialAlbum : null;
+    const cleanDelayed = isActualAlbum(track, delayedAlbumArrival) ? delayedAlbumArrival : null;
+
+    assert.strictEqual(cleanInitial, null);
+    assert.strictEqual(cleanDelayed, 'After Hours');
+    assert.strictEqual(cleanInitial !== cleanDelayed, true);
+    assert.strictEqual(formatLargeImageText(track, 'The Weeknd', cleanDelayed), 'After Hours');
 });
 
 runAllTests();

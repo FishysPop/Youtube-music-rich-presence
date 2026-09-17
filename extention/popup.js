@@ -313,12 +313,15 @@ document.addEventListener("DOMContentLoaded", () => {
       listenIdleView.style.display = "none";
       listenActiveView.style.display = "block";
       if (activeRoomCode) activeRoomCode.textContent = state.roomId;
+      if (leaveSessionBtn) {
+        leaveSessionBtn.textContent = isConnected ? "Leave Session" : "Cancel Connection";
+      }
       if (sessionStatusDetail) {
         if (isConnected) {
           const hostName = state.hostName || 'Host';
           sessionStatusDetail.textContent = `Listening with ${hostName}`;
         } else {
-          sessionStatusDetail.textContent = "Connecting to host over WebRTC...";
+          sessionStatusDetail.textContent = "Connecting to host...";
         }
       }
     }

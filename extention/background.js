@@ -154,19 +154,30 @@ function _sendSetActivityToNativeHost(activityData) {
         return;
     }
     try {
+        const sanitizedData = { ...activityData };
+        if (!sanitizedData.largeImageText) {
+            delete sanitizedData.largeImageText;
+        }
+        if (!sanitizedData.album) {
+            delete sanitizedData.album;
+        }
+        if (Array.isArray(sanitizedData.buttons) && sanitizedData.buttons.length > 2) {
+            console.warn(`[YTM RPC Background] Truncating ${sanitizedData.buttons.length} buttons to Discord's max of 2.`);
+            sanitizedData.buttons = sanitizedData.buttons.slice(0, 2);
+        }
         console.log('[YTM RPC Background] Posting SET_ACTIVITY to native host. Details:', {
-            track: activityData.details,
-            artist: activityData.state,
-            startTimestamp: activityData.startTimestamp,
-            startTimestampReadable: activityData.startTimestamp ? new Date(activityData.startTimestamp).toLocaleTimeString() : 'none',
-            endTimestamp: activityData.endTimestamp,
-            endTimestampReadable: activityData.endTimestamp ? new Date(activityData.endTimestamp).toLocaleTimeString() : 'none',
-            elapsedSeconds: activityData.startTimestamp ? ((Date.now() - activityData.startTimestamp) / 1000).toFixed(1) : 'none',
-            duration: activityData.duration,
-            smallImageKey: activityData.smallImageKey
+            track: sanitizedData.details,
+            artist: sanitizedData.state,
+            startTimestamp: sanitizedData.startTimestamp,
+            startTimestampReadable: sanitizedData.startTimestamp ? new Date(sanitizedData.startTimestamp).toLocaleTimeString() : 'none',
+            endTimestamp: sanitizedData.endTimestamp,
+            endTimestampReadable: sanitizedData.endTimestamp ? new Date(sanitizedData.endTimestamp).toLocaleTimeString() : 'none',
+            elapsedSeconds: sanitizedData.startTimestamp ? ((Date.now() - sanitizedData.startTimestamp) / 1000).toFixed(1) : 'none',
+            duration: sanitizedData.duration,
+            smallImageKey: sanitizedData.smallImageKey
         });
-        port.postMessage({ type: 'SET_ACTIVITY', data: activityData });
-        console.log('Background: Sent SET_ACTIVITY to native host:', activityData);
+        port.postMessage({ type: 'SET_ACTIVITY', data: sanitizedData });
+        console.log('Background: Sent SET_ACTIVITY to native host:', sanitizedData);
     } catch (error) {
         console.error('Background: Error posting SET_ACTIVITY to native host:', error);
         handlePortError(error, activityData);
@@ -486,6 +497,42 @@ function getPauseTimeout() {
     });
 }
 
+function cleanTitleForComparison(str) {
+    if (!str || typeof str !== 'string') return '';
+    return str
+        .toLowerCase()
+        .replace(/[\(\[][^\)\]]*(?:feat\.?|ft\.?|with|prod\.?|official|video|audio|remaster|version|deluxe|single|ep)[^\)\]]*[\)\]]/gi, '')
+        .replace(/\s*-\s*(?:single(?:\s+version)?|ep|deluxe(?:\s+edition)?|remastered|official(?:\s+audio|\s+video)?)\b.*$/gi, '')
+        .replace(/[^a-z0-9]/gi, ' ')
+        .trim()
+        .replace(/\s+/g, ' ');
+}
+
+function isActualAlbum(track, album) {
+    if (!album || typeof album !== 'string' || !album.trim()) return false;
+    if (!track || typeof track !== 'string' || !track.trim()) return false;
+
+    const cleanAlbum = album.trim();
+    const cleanTrack = track.trim();
+
+    if (cleanAlbum.toLowerCase() === cleanTrack.toLowerCase()) {
+        return false;
+    }
+
+    const normAlbum = cleanTitleForComparison(cleanAlbum);
+    const normTrack = cleanTitleForComparison(cleanTrack);
+
+    if (!normAlbum || !normTrack) {
+        return false;
+    }
+
+    if (normAlbum === normTrack) {
+        return false;
+    }
+
+    return true;
+}
+
 function processNewActivity(message) {
     if (message.isPlaying) {
         if (isPauseHidden) {
@@ -522,7 +569,6 @@ function processNewActivity(message) {
             : `https://music.youtube.com/search?q=${encodeURIComponent(`${message.artist} ${message.track}`)}`;
 
         const buttons = (activeSessionRoomId && activeSessionRole === 'HOST') ? [
-            { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${activeSessionRoomId}` },
             { label: "Listen Along", url: `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${activeSessionRoomId}` },
             { label: "Link", url: directOrSearchUrl }
         ] : [
@@ -530,9 +576,10 @@ function processNewActivity(message) {
             { label: "GitHub", url: "https://github.com/FishysPop/Youtube-music-rich-presence" }
         ];
 
-        const largeImageText = (message.album && message.album.trim())
-            ? `${message.track} • ${message.album.trim()}`
-            : (message.albumArtUrl ? `${message.track} - ${message.artist}` : 'YouTube Music');
+        const actualAlbum = (message.album && isActualAlbum(message.track, message.album))
+            ? message.album.trim()
+            : null;
+        const largeImageText = actualAlbum || null;
 
         const smallImageKey = message.repeatMode === 'ONE' ? 'repeat_one' : 'play';
         const smallImageText = message.repeatMode === 'ONE' ? 'On Loop' : 'Playing';
@@ -540,7 +587,7 @@ function processNewActivity(message) {
         currentSongActivity = {
             details: message.track,
             state: message.artist,
-            album: message.album || null,
+            album: actualAlbum,
             videoId: message.videoId || null,
             repeatMode: message.repeatMode || 'NONE',
             largeImageKey: message.albumArtUrl ? message.albumArtUrl.replace(/w\d+-h\d+/, 'w512-h512') : null,
@@ -554,10 +601,9 @@ function processNewActivity(message) {
         };
 
         if (activeSessionRoomId && activeSessionRole === 'HOST') {
-            currentSongActivity.party = {
-                id: activeSessionRoomId,
-                size: [activeSessionPeerCount + 1, 10]
-            };
+            currentSongActivity.partyId = activeSessionRoomId;
+            currentSongActivity.partySize = activeSessionPeerCount + 1;
+            currentSongActivity.partyMax = 10;
         }
         let initCurrentTime = 0;
         if (message.userIsSeeking && typeof message.currentTime === 'number' && message.currentTime > 0) {
@@ -597,9 +643,12 @@ function processNewActivity(message) {
             shouldUpdatePresence = true;
         }
 
-        if (message.album && message.album !== currentSongActivity.album) {
-            currentSongActivity.album = message.album;
-            currentSongActivity.largeImageText = `${currentSongActivity.details} • ${message.album.trim()}`;
+        const newActualAlbum = (message.album && isActualAlbum(currentSongActivity.details, message.album))
+            ? message.album.trim()
+            : null;
+        if (newActualAlbum !== currentSongActivity.album) {
+            currentSongActivity.album = newActualAlbum;
+            currentSongActivity.largeImageText = newActualAlbum;
             shouldUpdatePresence = true;
         }
 
@@ -607,7 +656,6 @@ function processNewActivity(message) {
             currentSongActivity.videoId = message.videoId;
             const directOrSearchUrl = `https://music.youtube.com/watch?v=${message.videoId}`;
             currentSongActivity.buttons = (activeSessionRoomId && activeSessionRole === 'HOST') ? [
-                { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${activeSessionRoomId}` },
                 { label: "Listen Along", url: `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${activeSessionRoomId}` },
                 { label: "Link", url: directOrSearchUrl }
             ] : [
@@ -920,20 +968,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (currentSongActivity) {
             if (activeSessionRoomId && activeSessionRole === 'HOST') {
                 currentSongActivity.buttons = [
-                    { label: "Listen Along", url: `https://music.youtube.com/#ytm-session=${activeSessionRoomId}` },
                     { label: "Listen Along", url: `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${activeSessionRoomId}` },
                     { label: "Link", url: `https://music.youtube.com/search?q=${encodeURIComponent(`${currentSongActivity.state} ${currentSongActivity.details}`)}` }
                 ];
-                currentSongActivity.party = {
-                    id: activeSessionRoomId,
-                    size: [activeSessionPeerCount + 1, 10]
-                };
+                currentSongActivity.partyId = activeSessionRoomId;
+                currentSongActivity.partySize = activeSessionPeerCount + 1;
+                currentSongActivity.partyMax = 10;
             } else {
                 currentSongActivity.buttons = [
                     { label: "Link", url: `https://music.youtube.com/search?q=${encodeURIComponent(`${currentSongActivity.state} ${currentSongActivity.details}`)}` },
                     { label: "GitHub", url: "https://github.com/FishysPop/Youtube-music-rich-presence" }
                 ];
                 delete currentSongActivity.party;
+                delete currentSongActivity.partyId;
+                delete currentSongActivity.partySize;
+                delete currentSongActivity.partyMax;
             }
             if (isRpcReady && port) {
                 _sendSetActivityToNativeHost(currentSongActivity);
