@@ -5,7 +5,6 @@ const {
     DRIFT_TOLERANCE_MS,
     SOFT_CATCHUP_MAX_MS,
     HARD_SEEK_THRESHOLD_MS,
-    DEFAULT_ICE_SERVERS,
     calculateDrift,
     determineSyncAction,
     sanitizePacket,
@@ -13,6 +12,9 @@ const {
     validateVideoId,
     calculateAdCatchUpTime,
     isNearTrackEnd,
+    sanitizeImageUrl,
+    validateRoomId,
+    hashRoomTopic,
     WebRtcSyncEngine
 } = require('../extention/webrtc-sync.js');
 
@@ -333,9 +335,9 @@ test('determineSyncAction: Synchronizes play/pause state regardless of drift', (
 });
 
 // 6. WebRtcSyncEngine Lifecycle & State Machine Tests
-test('WebRtcSyncEngine: Google STUN configuration is loaded by default', () => {
+test('WebRtcSyncEngine: initializes with no ICE servers (pure broker relay)', () => {
     const engine = new WebRtcSyncEngine();
-    assert.deepStrictEqual(engine.iceServers, DEFAULT_ICE_SERVERS);
+    assert.strictEqual(engine.iceServers, undefined);
     assert.strictEqual(engine.role, 'NONE');
     assert.strictEqual(engine.isHost, false);
 });
@@ -1052,6 +1054,344 @@ test('WebRtcSyncEngine: setUserName does not broadcast PEER_JOIN if username is 
     assert.strictEqual(peerJoins.length, 0);
 
     engine.leaveRoom();
+});
+
+test('sanitizeImageUrl: permits trusted YouTube/Google domains and rejects tracking or IP-leak domains', () => {
+    assert.strictEqual(sanitizeImageUrl('https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl('https://i9.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg'), 'https://i9.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl('https://i1.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg'), 'https://i1.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl('https://lh3.googleusercontent.com/sample=w512-h512'), 'https://lh3.googleusercontent.com/sample=w512-h512');
+    assert.strictEqual(sanitizeImageUrl('https://lh5.googleusercontent.com/sample=w512-h512'), 'https://lh5.googleusercontent.com/sample=w512-h512');
+    assert.strictEqual(sanitizeImageUrl('https://lh1.googleusercontent.com/sample=w512-h512'), 'https://lh1.googleusercontent.com/sample=w512-h512');
+    assert.strictEqual(sanitizeImageUrl('https://yt3.ggpht.com/avatar123'), 'https://yt3.ggpht.com/avatar123');
+
+    // Reject arbitrary googleusercontent.com subdomains (Cloud Shell preview, custom containers, etc.)
+    assert.strictEqual(sanitizeImageUrl('https://8080-cs-user.googleusercontent.com/pixel.png', 'dQw4w9WgXcQ'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl('https://attacker-app.googleusercontent.com/tracker.jpg', 'dQw4w9WgXcQ'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl('https://evil-googleusercontent.com/ip.png', 'dQw4w9WgXcQ'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+
+    assert.strictEqual(sanitizeImageUrl('https://evil-tracking-server.com/canary.png', 'dQw4w9WgXcQ'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl('http://malicious.com/ip.jpg', 'dQw4w9WgXcQ'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl('javascript:alert(1)', 'dQw4w9WgXcQ'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl('data:image/png;base64,AAAA', 'dQw4w9WgXcQ'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl('https://evil-tracking-server.com/canary.png', null), '');
+    assert.strictEqual(sanitizeImageUrl('', 'dQw4w9WgXcQ'), 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitizeImageUrl(null, null), '');
+});
+
+test('sanitizePacket: sanitizes albumArtUrl and upcomingTracks thumbnail against IP leak vectors', () => {
+    const maliciousPacket = {
+        type: 'TRACK_CHANGE',
+        videoId: 'dQw4w9WgXcQ',
+        track: 'Rickroll',
+        artist: 'Rick',
+        albumArtUrl: 'https://evil-tracker.com/pixel.png',
+        upcomingTracks: [
+            { videoId: 'kJQP7kiw5Fk', title: 'Song 2', artist: 'Artist 2', thumbnail: 'https://evil-tracker.com/thumb.png' },
+            { videoId: 'otKN6C8LFzQ', title: 'Song 3', artist: 'Artist 3', thumbnail: 'https://i.ytimg.com/vi/otKN6C8LFzQ/default.jpg' }
+        ]
+    };
+
+    const sanitized = sanitizePacket(maliciousPacket);
+    assert.strictEqual(sanitized.albumArtUrl, 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    assert.strictEqual(sanitized.upcomingTracks[0].thumbnail, 'https://i.ytimg.com/vi/kJQP7kiw5Fk/hqdefault.jpg');
+    assert.strictEqual(sanitized.upcomingTracks[1].thumbnail, 'https://i.ytimg.com/vi/otKN6C8LFzQ/default.jpg');
+});
+
+test('validateRoomId: validates room code formats and rejects injection, wildcards, and spaces', () => {
+    assert.strictEqual(validateRoomId('YTM-ABC123'), true);
+    assert.strictEqual(validateRoomId('YTM-6CHAR1'), true);
+    assert.strictEqual(validateRoomId('PARTY_ROOM-99'), true);
+
+    assert.strictEqual(validateRoomId('ytm/sync/#'), false);
+    assert.strictEqual(validateRoomId('YTM+WILDCARD'), false);
+    assert.strictEqual(validateRoomId('YTM-12" autofocus="'), false);
+    assert.strictEqual(validateRoomId('YTM-123\n\r'), false);
+    assert.strictEqual(validateRoomId('../path/traversal'), false);
+    assert.strictEqual(validateRoomId('<script>'), false);
+    assert.strictEqual(validateRoomId(''), false);
+    assert.strictEqual(validateRoomId(null), false);
+    assert.strictEqual(validateRoomId(undefined), false);
+});
+
+test('hashRoomTopic: partitions topics without predictable shared wildcard prefixes', () => {
+    const topic1 = hashRoomTopic('YTM-ABC123');
+    const topic2 = hashRoomTopic('YTM-XYZ789');
+    assert.match(topic1, /^ytm_v2_[a-zA-Z0-9_-]+$/);
+    assert.match(topic2, /^ytm_v2_[a-zA-Z0-9_-]+$/);
+    assert.notStrictEqual(topic1, topic2);
+    assert.strictEqual(hashRoomTopic('YTM-ABC123'), topic1);
+});
+
+test('WebRtcSyncEngine: Listener locks host peer ID and ignores host hijacking from other peers', async () => {
+    const engine = new WebRtcSyncEngine({});
+    engine.joinRoom('YTM-LOCK1');
+
+    await engine.handleSignalMessage({
+        type: 'ROOM_INFO',
+        peerId: 'legit-host-1',
+        hostName: 'LegitHost',
+        roomId: 'YTM-LOCK1'
+    });
+
+    assert.strictEqual(engine.hostPeerId, 'legit-host-1');
+    assert.strictEqual(engine.hostName, 'LegitHost');
+
+    await engine.handleSignalMessage({
+        type: 'SYNC_STATE',
+        peerId: 'rogue-peer-99',
+        hostName: 'Attacker',
+        roomId: 'YTM-LOCK1',
+        track: 'Hacked Song',
+        videoId: 'kJQP7kiw5Fk',
+        currentTime: 50,
+        isPlaying: true
+    });
+
+    assert.strictEqual(engine.hostPeerId, 'legit-host-1');
+    assert.strictEqual(engine.hostName, 'LegitHost');
+
+    engine.leaveRoom();
+});
+
+test('WebRtcSyncEngine: Listener rejects control packets from rogue peers', async () => {
+    let trackChangeCalled = false;
+    let syncActionCalled = false;
+
+    const listener = new WebRtcSyncEngine({
+        onTrackChange: () => { trackChangeCalled = true; },
+        onSyncAction: () => { syncActionCalled = true; }
+    });
+
+    listener.joinRoom('YTM-PROT1');
+
+    const legitToken = 'tok_hostsecret1234567890';
+
+    await listener.handleSignalMessage({
+        type: 'SYNC_STATE',
+        peerId: 'host-real-1',
+        hostToken: legitToken,
+        hostName: 'HostAlice',
+        roomId: 'YTM-PROT1',
+        track: 'Track 1',
+        videoId: 'dQw4w9WgXcQ',
+        currentTime: 10,
+        isPlaying: true
+    });
+
+    trackChangeCalled = false;
+    syncActionCalled = false;
+
+    await listener.handleSignalMessage({
+        type: 'TRACK_CHANGE',
+        peerId: 'rogue-attacker',
+        roomId: 'YTM-PROT1',
+        track: 'Malicious Song',
+        videoId: 'kJQP7kiw5Fk'
+    });
+    assert.strictEqual(trackChangeCalled, false);
+
+    // Rogue attacker attempting to spoof host peerId but missing hostToken
+    await listener.handleSignalMessage({
+        type: 'TRACK_CHANGE',
+        peerId: 'host-real-1',
+        roomId: 'YTM-PROT1',
+        track: 'Spoofed Song Missing Token',
+        videoId: 'kJQP7kiw5Fk'
+    });
+    assert.strictEqual(trackChangeCalled, false);
+
+    // Rogue attacker attempting to spoof host peerId with wrong hostToken
+    await listener.handleSignalMessage({
+        type: 'TRACK_CHANGE',
+        peerId: 'host-real-1',
+        hostToken: 'tok_attacker_fake_token99',
+        roomId: 'YTM-PROT1',
+        track: 'Spoofed Song Wrong Token',
+        videoId: 'kJQP7kiw5Fk'
+    });
+    assert.strictEqual(trackChangeCalled, false);
+
+    await listener.handleSignalMessage({
+        type: 'PLAY',
+        peerId: 'rogue-attacker',
+        roomId: 'YTM-PROT1',
+        currentTime: 30
+    });
+    assert.strictEqual(syncActionCalled, false);
+
+    await listener.handleSignalMessage({
+        type: 'PAUSE',
+        peerId: 'rogue-attacker',
+        roomId: 'YTM-PROT1',
+        currentTime: 35
+    });
+    assert.strictEqual(syncActionCalled, false);
+
+    await listener.handleSignalMessage({
+        type: 'SEEK',
+        peerId: 'rogue-attacker',
+        roomId: 'YTM-PROT1',
+        currentTime: 100
+    });
+    assert.strictEqual(syncActionCalled, false);
+
+    await listener.handleSignalMessage({
+        type: 'QUEUE_SYNC',
+        peerId: 'rogue-attacker',
+        roomId: 'YTM-PROT1',
+        upcomingTracks: [{ videoId: 'kJQP7kiw5Fk', title: 'X', artist: 'Y' }]
+    });
+    assert.strictEqual(syncActionCalled, false);
+
+    await listener.handleSignalMessage({
+        type: 'TRACK_CHANGE',
+        peerId: 'host-real-1',
+        hostToken: legitToken,
+        roomId: 'YTM-PROT1',
+        track: 'Authorized Track',
+        videoId: 'kJQP7kiw5Fk'
+    });
+    assert.strictEqual(trackChangeCalled, true);
+
+    listener.leaveRoom();
+});
+
+test('WebRtcSyncEngine: Listener ignores spoofed HOST_LEAVE from rogue peers', async () => {
+    let disconnectedRoom = null;
+    const listener = new WebRtcSyncEngine({
+        onConnectionStatus: (status, roomId) => {
+            if (status === 'host_disconnected') disconnectedRoom = roomId;
+        }
+    });
+
+    listener.joinRoom('YTM-LEAVE1');
+
+    await listener.handleSignalMessage({
+        type: 'ROOM_INFO',
+        peerId: 'host-real-1',
+        roomId: 'YTM-LEAVE1'
+    });
+
+    await listener.handleSignalMessage({
+        type: 'HOST_LEAVE',
+        peerId: 'rogue-attacker',
+        roomId: 'YTM-LEAVE1'
+    });
+
+    assert.strictEqual(disconnectedRoom, null);
+    assert.strictEqual(listener.connectionStatus, 'connected');
+
+    await listener.handleSignalMessage({
+        type: 'HOST_LEAVE',
+        peerId: 'host-real-1',
+        roomId: 'YTM-LEAVE1'
+    });
+
+    assert.strictEqual(disconnectedRoom, 'YTM-LEAVE1');
+});
+
+test('WebRtcSyncEngine: Host ignores ROOM_CLAIMED received after the initial probe window', async () => {
+    const host = new WebRtcSyncEngine({});
+    const createdRoom = host.createRoom('YTM-PROBE1');
+
+    assert.strictEqual(host.roomId, 'YTM-PROBE1');
+
+    host.probeWindowExpired = true;
+
+    await host.handleSignalMessage({
+        type: 'ROOM_CLAIMED',
+        peerId: 'existing-host-99',
+        roomId: 'YTM-PROBE1'
+    });
+
+    assert.strictEqual(host.roomId, 'YTM-PROBE1');
+    assert.strictEqual(host.isHost, true);
+
+    host.leaveRoom();
+});
+
+test('calculateDrift and calculateAdCatchUpTime: clamp transit latency and discard extreme timestamps', () => {
+    const normalPacket = {
+        currentTime: 100,
+        isPlaying: true,
+        playbackRate: 1.0,
+        timestamp: 100000
+    };
+    const normalDrift = calculateDrift(100, normalPacket, 102000, 0);
+    assert.strictEqual(normalDrift, 2);
+
+    const staleEpochPacket = {
+        currentTime: 50,
+        isPlaying: true,
+        playbackRate: 1.0,
+        timestamp: 1000
+    };
+    const cappedDrift = calculateDrift(50, staleEpochPacket, 1700000000000, 0);
+    assert.strictEqual(cappedDrift, 0);
+
+    const futurePacket = {
+        currentTime: 50,
+        isPlaying: true,
+        playbackRate: 1.0,
+        timestamp: 1700000000000 + 100000
+    };
+    const futureDrift = calculateDrift(50, futurePacket, 1700000000000, 0);
+    assert.strictEqual(futureDrift, 0);
+
+    const normalAdPacket = {
+        currentTime: 30,
+        isPlaying: true,
+        playbackRate: 1.0,
+        timestamp: 100000
+    };
+    const normalAdCatchUp = calculateAdCatchUpTime(normalAdPacket, 110000, 0);
+    assert.strictEqual(normalAdCatchUp, 40);
+
+    const extremeAdPacket = {
+        currentTime: 30,
+        isPlaying: true,
+        playbackRate: 1.0,
+        timestamp: 1000
+    };
+    const cappedAdCatchUp = calculateAdCatchUpTime(extremeAdPacket, 1700000000000, 0);
+    assert.strictEqual(cappedAdCatchUp <= 330, true);
+});
+
+test('WebRtcSyncEngine: ignores CLOCK_PONG from rogue peers and discards invalid RTT samples', async () => {
+    const listener = new WebRtcSyncEngine({});
+    listener.joinRoom('YTM-CLOCK2');
+
+    await listener.handleSignalMessage({
+        type: 'ROOM_INFO',
+        peerId: 'host-auth-1',
+        roomId: 'YTM-CLOCK2'
+    });
+
+    const now = Date.now();
+    await listener.handleSignalMessage({
+        type: 'CLOCK_PONG',
+        peerId: 'rogue-attacker',
+        clientTime: now - 50,
+        hostTime: now + 50000,
+        roomId: 'YTM-CLOCK2'
+    });
+
+    assert.strictEqual(listener.clockOffset, 0);
+    assert.strictEqual(listener.clockOffsetSamples.length, 0);
+
+    await listener.handleSignalMessage({
+        type: 'CLOCK_PONG',
+        peerId: 'host-auth-1',
+        clientTime: now - 50000,
+        hostTime: now,
+        roomId: 'YTM-CLOCK2'
+    });
+
+    assert.strictEqual(listener.clockOffset, 0);
+    assert.strictEqual(listener.clockOffsetSamples.length, 0);
+
+    listener.leaveRoom();
 });
 
 runAllTests();

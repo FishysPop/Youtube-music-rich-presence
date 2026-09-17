@@ -48,9 +48,32 @@
 
   window.__syncedUpcomingTracks = [];
 
+  function sanitizeImageUrl(url, videoId) {
+    if (!url || typeof url !== 'string') {
+      return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null;
+    }
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null;
+      }
+      const hostname = parsed.hostname.toLowerCase();
+      const isTrusted = hostname === 'i.ytimg.com' ||
+                        hostname === 'i9.ytimg.com' ||
+                        /^i[0-9]\.ytimg\.com$/.test(hostname) ||
+                        hostname === 'yt3.ggpht.com' ||
+                        hostname.endsWith('.googleusercontent.com');
+                        /^lh[1-6]\.googleusercontent\.com$/.test(hostname);
+      if (isTrusted) {
+        return url;
+      }
+    } catch (e) {}
+    return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null;
+  }
+
   function formatUpcomingTrackItem(track) {
     if (!track || !track.videoId) return null;
-    const thumbUrl = track.albumArtUrl || track.thumbnail || `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
+    const thumbUrl = sanitizeImageUrl(track.albumArtUrl || track.thumbnail, track.videoId);
     return {
       playlistPanelVideoRenderer: {
         title: { runs: [{ text: track.title || 'Track' }] },

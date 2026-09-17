@@ -225,6 +225,58 @@
       transform: scale(0.99);
     }
 
+    .manual-join-row {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      margin: 16px 0 16px 0;
+    }
+
+    .manual-join-input {
+      flex: 1;
+      min-width: 0;
+      height: 40px;
+      padding: 0 12px;
+      background: var(--surface-subtle);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+      font-family: inherit;
+      transition: border-color 0.15s ease;
+    }
+
+    .manual-join-input:focus {
+      border-color: var(--border-focus);
+    }
+
+    .manual-join-input::placeholder {
+      color: var(--text-dim);
+    }
+
+    .manual-join-row .btn {
+      width: auto;
+      height: 40px;
+      padding: 0 18px;
+      flex-shrink: 0;
+    }
+
+    .btn-disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+      background: var(--surface-subtle);
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
+
+    .btn-disabled:hover {
+      background: var(--surface-subtle);
+      border-color: var(--border);
+      color: var(--text-muted);
+      transform: none;
+    }
+
     .footer {
       margin-top: 24px;
       display: flex;
@@ -267,12 +319,12 @@
         <div class="room-tag" id="roomTag" style="display: none;"></div>
       </div>
 
-      <h1 id="titleText">Listen Together</h1>
-      <p class="description" id="descText">Synchronize music playback in real-time with your friend.</p>
+      <h1 id="titleText">Install Extension</h1>
+      <p class="description" id="descText">The YouTube Music Rich Presence extension is required to synchronize playback with your friend.</p>
 
-      <div id="manualJoinRow" style="display: none; gap: 8px; margin: 16px 0 16px 0;">
-        <input type="text" id="manualJoinInput" placeholder="Enter room code or link..." style="flex: 1; min-width: 0; padding: 10px 12px; background: var(--surface-subtle); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; outline: none; font-family: inherit;">
-        <button id="manualJoinBtn" class="btn btn-primary" style="padding: 0 16px; height: 38px; font-size: 13px; flex-shrink: 0;">Join</button>
+      <div id="manualJoinRow" class="manual-join-row" style="display: none;">
+        <input type="text" id="manualJoinInput" class="manual-join-input" placeholder="Enter room code or link..." spellcheck="false" autocomplete="off">
+        <button id="manualJoinBtn" class="btn btn-primary">Join</button>
       </div>
 
       <div class="actions">
@@ -347,10 +399,10 @@
         roomTag.style.display = 'inline-block';
         roomTag.textContent = roomId;
         secondaryBtn.href = `https://music.youtube.com/?ytm-session=${roomId}`;
-        manualJoinRow.style.display = 'none';
       } else {
-        manualJoinRow.style.display = 'flex';
+        roomTag.style.display = 'none';
       }
+      manualJoinRow.style.display = 'none';
     }
 
     applyRoomId(roomId);
@@ -361,37 +413,156 @@
     const descText = document.getElementById('descText');
     const primaryBtn = document.getElementById('primaryBtn');
 
+    function detectBrowser(uaString, uaData) {
+      if (uaData && Array.isArray(uaData.brands)) {
+        const brands = uaData.brands.map(b => b.brand);
+        if (brands.some(b => /Brave/i.test(b))) return { name: 'Brave', supported: true };
+        if (brands.some(b => /Edge|Microsoft Edge/i.test(b))) return { name: 'Edge', supported: true };
+        if (brands.some(b => /Opera/i.test(b))) return { name: 'Opera', supported: true };
+        if (brands.some(b => /Vivaldi/i.test(b))) return { name: 'Vivaldi', supported: true };
+      }
+
+      const ua = uaString !== undefined
+        ? uaString
+        : ((typeof navigator !== 'undefined' && navigator.userAgent) ? navigator.userAgent : '');
+
+      if (/Firefox|FxiOS/i.test(ua)) {
+        return { name: 'Firefox', supported: false };
+      }
+      if (/Edg\//i.test(ua)) {
+        return { name: 'Edge', supported: true };
+      }
+      if (/OPR\/|Opera\//i.test(ua)) {
+        return { name: 'Opera', supported: true };
+      }
+      if (/Vivaldi\//i.test(ua)) {
+        return { name: 'Vivaldi', supported: true };
+      }
+      if (/Arc\//i.test(ua)) {
+        return { name: 'Arc', supported: true };
+      }
+      if (/Chrome|CriOS/i.test(ua)) {
+        return { name: 'Chrome', supported: true };
+      }
+      return { name: 'Chrome', supported: true };
+    }
+
+    let detectedBrowser = (typeof navigator !== 'undefined' && navigator.userAgentData)
+      ? detectBrowser(navigator.userAgent, navigator.userAgentData)
+      : detectBrowser();
+
+    function applyBrowserInstallInfo(browser) {
+      if (!browser) browser = detectedBrowser;
+      detectedBrowser = browser;
+
+      if (!browser.supported) {
+        primaryBtn.textContent = `${browser.name} is not supported at this time`;
+        primaryBtn.removeAttribute('href');
+        primaryBtn.classList.add('btn-disabled');
+        primaryBtn.setAttribute('aria-disabled', 'true');
+        primaryBtn.onclick = (e) => e.preventDefault();
+      } else {
+        primaryBtn.textContent = `Add to ${browser.name}`;
+        primaryBtn.href = STORE_URL;
+        primaryBtn.classList.remove('btn-disabled');
+        primaryBtn.removeAttribute('aria-disabled');
+        primaryBtn.onclick = null;
+      }
+    }
+
+    applyBrowserInstallInfo();
+
+    if (typeof navigator !== 'undefined' && navigator.brave && typeof navigator.brave.isBrave === 'function') {
+      navigator.brave.isBrave().then((isBrave) => {
+        if (isBrave) {
+          applyBrowserInstallInfo({ name: 'Brave', supported: true });
+        }
+      }).catch(() => {});
+    }
+
+    function checkExtensionActive() {
+      if (document.documentElement && document.documentElement.getAttribute('data-ytm-extension-active') === 'true') {
+        checked = true;
+        markInstalled();
+        return true;
+      }
+      return false;
+    }
+
+    window.addEventListener('ytm-extension-active', () => {
+      checked = true;
+      markInstalled();
+    });
+
+    window.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'YTM_GATEWAY_INTERCEPTOR_ACTIVE') {
+        checked = true;
+        markInstalled();
+      }
+    });
+
+    try {
+      window.dispatchEvent(new CustomEvent('ytm-ping-extension'));
+      window.postMessage({ type: 'YTM_PAGE_PING_EXTENSION' }, '*');
+    } catch (e) {}
+
     function markNotInstalled() {
       statusDot.style.background = 'var(--status-warn)';
       statusLabel.textContent = 'Extension required';
       titleText.textContent = 'Install Extension';
       descText.textContent = 'The YouTube Music Rich Presence extension is required to synchronize playback with your friend.';
-      primaryBtn.textContent = 'Add to Chrome';
-      primaryBtn.href = STORE_URL;
+      manualJoinRow.style.display = 'none';
+      secondaryBtn.style.display = 'flex';
+      applyBrowserInstallInfo();
     }
 
     function markInstalled() {
       statusDot.style.background = 'var(--status-ok)';
       statusLabel.textContent = 'Extension active';
-      titleText.textContent = 'Connecting to YouTube Music';
-      descText.textContent = 'Opening your listening session in YouTube Music...';
-      primaryBtn.textContent = 'Open YouTube Music';
-      const targetUrl = roomId ? `https://music.youtube.com/?ytm-session=${roomId}` : 'https://music.youtube.com/';
-      primaryBtn.href = targetUrl;
-      window.location.replace(targetUrl);
+      secondaryBtn.style.display = 'none';
+      primaryBtn.classList.remove('btn-disabled');
+      primaryBtn.removeAttribute('aria-disabled');
+      primaryBtn.onclick = null;
+
+      if (roomId && roomId !== 'PING') {
+        manualJoinRow.style.display = 'none';
+        titleText.textContent = 'Connecting to YouTube Music';
+        descText.textContent = 'Opening your listening session in YouTube Music...';
+        primaryBtn.textContent = 'Open YouTube Music';
+        const targetUrl = `https://music.youtube.com/?ytm-session=${roomId}`;
+        primaryBtn.href = targetUrl;
+        window.location.replace(targetUrl);
+      } else {
+        manualJoinRow.style.display = 'flex';
+        titleText.textContent = 'Listen Together';
+        descText.textContent = 'Synchronize music playback in real-time with your friend.';
+        primaryBtn.textContent = 'Open YouTube Music';
+        primaryBtn.href = 'https://music.youtube.com/';
+      }
     }
 
     let checked = false;
+    checkExtensionActive();
 
     function triggerExtensionJoin(targetId) {
+      if (checkExtensionActive() && targetId && targetId !== 'PING') {
+        try {
+          window.dispatchEvent(new CustomEvent('ytm-join-session', { detail: { roomId: targetId } }));
+          window.postMessage({ type: 'GATEWAY_JOIN_SESSION', roomId: targetId }, '*');
+        } catch (e) {}
+        return;
+      }
+
+      const activeId = (document.documentElement && document.documentElement.getAttribute('data-ytm-extension-id')) || EXTENSION_ID;
+
       if (window.chrome && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
         try {
           chrome.runtime.sendMessage(
-            EXTENSION_ID,
+            activeId,
             { type: 'GATEWAY_JOIN_SESSION', roomId: targetId },
             (res) => {
               if (chrome.runtime.lastError || !res || !res.success) {
-                if (!checked) {
+                if (!checked && !checkExtensionActive()) {
                   checked = true;
                   markNotInstalled();
                 }
@@ -402,19 +573,17 @@
             }
           );
         } catch (e) {
-          markNotInstalled();
+          if (!checkExtensionActive()) markNotInstalled();
         }
       } else {
-        markNotInstalled();
+        if (!checkExtensionActive()) markNotInstalled();
       }
     }
 
     if (roomId) {
       triggerExtensionJoin(roomId);
     } else {
-      markNotInstalled();
-      titleText.textContent = 'Listen Together';
-      descText.textContent = 'Synchronize music playback in real-time with your friend.';
+      triggerExtensionJoin('PING');
     }
 
     function handleManualJoin() {
@@ -436,8 +605,10 @@
 
     setTimeout(() => {
       if (!checked) {
-        checked = true;
-        markNotInstalled();
+        if (!checkExtensionActive()) {
+          checked = true;
+          markNotInstalled();
+        }
       }
     }, 450);
   </script>

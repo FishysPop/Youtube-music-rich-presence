@@ -1,4 +1,42 @@
 (() => {
+  function notifyActive() {
+    try {
+      if (document.documentElement) {
+        document.documentElement.setAttribute('data-ytm-extension-active', 'true');
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+          document.documentElement.setAttribute('data-ytm-extension-id', chrome.runtime.id);
+        }
+      }
+      window.postMessage({ type: 'YTM_GATEWAY_INTERCEPTOR_ACTIVE' }, window.location.origin);
+      window.dispatchEvent(new CustomEvent('ytm-extension-active'));
+    } catch (e) {}
+  }
+
+  notifyActive();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', notifyActive);
+  }
+
+  window.addEventListener('message', (event) => {
+    if (event.origin !== window.location.origin) return;
+    if (!event.data) return;
+    if (event.data.type === 'YTM_PAGE_PING_EXTENSION') {
+      notifyActive();
+    } else if (event.data.type === 'GATEWAY_JOIN_SESSION' && typeof event.data.roomId === 'string') {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: 'GATEWAY_JOIN_SESSION', roomId: event.data.roomId });
+      }
+    }
+  });
+
+  window.addEventListener('ytm-ping-extension', notifyActive);
+  window.addEventListener('ytm-join-session', (e) => {
+    const roomId = e.detail && e.detail.roomId;
+    if (roomId && typeof roomId === 'string' && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({ type: 'GATEWAY_JOIN_SESSION', roomId: roomId });
+    }
+  });
+
   function extractSession() {
     const full = window.location.href;
     try {
@@ -19,4 +57,3 @@
     chrome.runtime.sendMessage({ type: 'GATEWAY_JOIN_SESSION', roomId: roomId });
   }
 })();
-

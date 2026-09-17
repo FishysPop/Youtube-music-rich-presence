@@ -6,12 +6,6 @@ const DRIFT_TOLERANCE_MS = 2500;
 const SOFT_CATCHUP_MAX_MS = 5000;
 const HARD_SEEK_THRESHOLD_MS = 5000;
 
-const DEFAULT_ICE_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
-];
-
 function generateRoomCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = '';
@@ -24,6 +18,49 @@ function generateRoomCode() {
 function validateVideoId(videoId) {
     if (typeof videoId !== 'string') return false;
     return /^[a-zA-Z0-9_-]{11}$/.test(videoId);
+}
+
+function validateRoomId(roomId) {
+    if (typeof roomId !== 'string') return false;
+    if (/[\s\r\n]/.test(roomId)) return false;
+    const upper = roomId.toUpperCase();
+    return /^YTM-[A-Z0-9]{6}$/.test(upper) || /^[A-Z0-9_-]{3,32}$/.test(upper);
+}
+
+function sanitizeImageUrl(url, fallbackVideoId = null) {
+    const fallback = (fallbackVideoId && validateVideoId(fallbackVideoId))
+        ? `https://i.ytimg.com/vi/${fallbackVideoId}/hqdefault.jpg`
+        : '';
+    if (typeof url !== 'string' || !url.trim()) return fallback;
+    try {
+        const parsed = new URL(url.trim());
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return fallback;
+        const host = parsed.hostname.toLowerCase();
+        const isTrustedHost = (
+            host === 'i.ytimg.com' ||
+            /^i[0-9]\.ytimg\.com$/.test(host) ||
+            host === 'yt3.ggpht.com' ||
+            /^lh[1-6]\.googleusercontent\.com$/.test(host)
+        );
+        if (isTrustedHost) {
+            return `https://${parsed.host}${parsed.pathname}${parsed.search}`.slice(0, 1000);
+        }
+    } catch (e) {}
+    return fallback;
+}
+
+function hashRoomTopic(roomId) {
+    const normalized = typeof roomId === 'string' ? roomId.trim().toUpperCase() : '';
+    let h1 = 0x811c9dc5;
+    let h2 = 0x9e3779b9;
+    for (let i = 0; i < normalized.length; i++) {
+        const c = normalized.charCodeAt(i);
+        h1 = Math.imul(h1 ^ c, 0x01000193);
+        h2 = Math.imul(h2 ^ ((c << 5) - c), 0x5bd1e995);
+    }
+    const part1 = (h1 >>> 0).toString(36).padStart(7, '0');
+    const part2 = (h2 >>> 0).toString(36).padStart(7, '0');
+    return `ytm_v2_${part1}${part2}`;
 }
 
 function sanitizePacket(packet) {
@@ -97,7 +134,7 @@ function sanitizePacket(packet) {
                 title: typeof item.title === 'string' ? item.title.slice(0, 150) : '',
                 artist: typeof item.artist === 'string' ? item.artist.slice(0, 150) : '',
                 durationText: typeof item.durationText === 'string' ? item.durationText.slice(0, 20) : '',
-                thumbnail: (typeof item.thumbnail === 'string' && (item.thumbnail.startsWith('http://') || item.thumbnail.startsWith('https://'))) ? item.thumbnail.slice(0, 500) : ''
+                thumbnail: sanitizeImageUrl(item.thumbnail, item.videoId)
             }));
     }
 
@@ -132,10 +169,7 @@ function sanitizePacket(packet) {
     }
 
     if (packet.albumArtUrl !== undefined && packet.albumArtUrl !== null) {
-        const url = String(packet.albumArtUrl);
-        if (url.startsWith('http://') || url.startsWith('https://')) {
-            sanitized.albumArtUrl = url.slice(0, 1000);
-        }
+        sanitized.albumArtUrl = sanitizeImageUrl(packet.albumArtUrl, packet.videoId || packet.currentVideoId);
     }
 
     if (packet.timestamp !== undefined && packet.timestamp !== null) {
@@ -181,7 +215,17 @@ function sanitizePacket(packet) {
     }
 
     if (packet.roomId !== undefined && packet.roomId !== null) {
-        sanitized.roomId = String(packet.roomId).slice(0, 50);
+        if (typeof packet.roomId === 'string' && validateRoomId(packet.roomId)) {
+            sanitized.roomId = packet.roomId.trim().toUpperCase();
+        } else {
+            return null;
+        }
+    }
+
+    if (packet.hostToken !== undefined && packet.hostToken !== null) {
+        if (typeof packet.hostToken === 'string' && /^[a-zA-Z0-9_-]{16,64}$/.test(packet.hostToken)) {
+            sanitized.hostToken = packet.hostToken;
+        }
     }
 
     if (packet.clientTime !== undefined && packet.clientTime !== null) {
@@ -205,7 +249,9 @@ function calculateDrift(localCurrentTime, remotePacket, localNow = Date.now(), c
     if (!remotePacket || typeof remotePacket.currentTime !== 'number' || remotePacket.isAd) return 0;
 
     const normalizedNow = localNow + (typeof clockOffset === 'number' ? clockOffset : 0);
-    const transitLatencySec = Math.max(0, (normalizedNow - (remotePacket.timestamp || normalizedNow)) / 1000);
+    const rawTransitLatencySec = (normalizedNow - (remotePacket.timestamp || normalizedNow)) / 1000;
+    if (rawTransitLatencySec < -5 || rawTransitLatencySec > 15) return 0;
+    const transitLatencySec = Math.max(0, Math.min(rawTransitLatencySec, 5.0));
     const expectedHostTime = remotePacket.isPlaying
         ? remotePacket.currentTime + (transitLatencySec * (remotePacket.playbackRate || 1.0))
         : remotePacket.currentTime;
@@ -217,7 +263,9 @@ function calculateAdCatchUpTime(packet, localNow = Date.now(), clockOffset = 0) 
     if (!packet || typeof packet.currentTime !== 'number') return 0;
     if (!packet.isPlaying) return packet.currentTime;
     const normalizedNow = localNow + (typeof clockOffset === 'number' ? clockOffset : 0);
-    const elapsedSec = Math.max(0, (normalizedNow - (packet.timestamp || normalizedNow)) / 1000);
+    const rawElapsedSec = (normalizedNow - (packet.timestamp || normalizedNow)) / 1000;
+    if (rawElapsedSec < -5) return packet.currentTime;
+    const elapsedSec = Math.max(0, Math.min(rawElapsedSec, 300));
     return packet.currentTime + (elapsedSec * (packet.playbackRate || 1.0));
 }
 
@@ -286,11 +334,13 @@ function determineSyncAction(driftMs, localIsPlaying, remoteIsPlaying, localCurr
 
 class WebRtcSyncEngine {
     constructor(options = {}) {
-        this.iceServers = options.iceServers || DEFAULT_ICE_SERVERS;
         this.role = 'NONE';
         this.roomId = null;
         this.peerId = `peer-${Math.random().toString(36).substring(2, 9)}`;
         this.isHost = false;
+        this.hostToken = null;
+        this.probeWindowExpired = false;
+        this.probeWindowTimer = null;
         this.userName = options.userName || 'Anonymous';
         this.hostName = null;
         this.peerUsers = new Map();
@@ -313,6 +363,7 @@ class WebRtcSyncEngine {
         this.onTrackChange = options.onTrackChange || (() => {});
         this.onPeerCountChange = options.onPeerCountChange || (() => {});
         this.onPeersChange = options.onPeersChange || (() => {});
+        this.lastTrackChangePacketTime = 0;
         this.onConnectionStatus = options.onConnectionStatus || (() => {});
     }
 
@@ -322,9 +373,11 @@ class WebRtcSyncEngine {
 
     handleClockPong(signal, receiveTime = Date.now()) {
         if (!signal || typeof signal.clientTime !== 'number' || typeof signal.hostTime !== 'number') return;
-        const rtt = Math.max(0, receiveTime - signal.clientTime);
+        const rtt = receiveTime - signal.clientTime;
+        if (rtt < 0 || rtt > 10000) return;
         const oneWay = rtt / 2;
         const offset = Math.round(signal.hostTime - signal.clientTime - oneWay);
+        if (Math.abs(offset) > 86400000) return;
         this.clockOffsetSamples.push(offset);
         if (this.clockOffsetSamples.length > 5) this.clockOffsetSamples.shift();
         const sorted = [...this.clockOffsetSamples].sort((a, b) => a - b);
@@ -423,10 +476,20 @@ class WebRtcSyncEngine {
     }
 
     createRoom(customRoomId = null) {
+        if (customRoomId && !validateRoomId(customRoomId)) {
+            console.warn(`[WebRTC Sync] Cannot create room: Invalid custom room ID format (${customRoomId})`);
+            return null;
+        }
         this.cleanup();
         this.isHost = true;
         this.role = 'HOST';
-        this.roomId = customRoomId || generateRoomCode();
+        this.roomId = customRoomId ? customRoomId.trim().toUpperCase() : generateRoomCode();
+        this.hostToken = `tok_${Math.random().toString(36).substring(2, 10)}${Math.random().toString(36).substring(2, 10)}`;
+        this.probeWindowExpired = false;
+        if (this.probeWindowTimer) clearTimeout(this.probeWindowTimer);
+        this.probeWindowTimer = setTimeout(() => {
+            this.probeWindowExpired = true;
+        }, 2500);
         this.connectionStatus = 'connected';
         console.log(`[WebRTC Sync] Hosting room created: ${this.roomId} (peerId: ${this.peerId})`);
         this.connectSignaling();
@@ -436,7 +499,11 @@ class WebRtcSyncEngine {
     }
 
     joinRoom(roomId) {
-        const normalized = roomId ? roomId.trim().toUpperCase() : '';
+        if (!validateRoomId(roomId)) {
+            console.warn(`[WebRTC Sync] Cannot join room: Invalid room ID format (${roomId})`);
+            return null;
+        }
+        const normalized = roomId.trim().toUpperCase();
         if (this.isHost && this.roomId === normalized) {
             console.warn(`[WebRTC Sync] Cannot join room ${normalized}: Already hosting this room.`);
             return this.roomId;
@@ -451,6 +518,7 @@ class WebRtcSyncEngine {
         this.roomId = normalized;
         this.connectionStatus = 'connecting';
         this.hostPeerId = null;
+        this.hostToken = null;
         this.hostName = null;
         this.lastHostActivity = 0;
         console.log(`[WebRTC Sync] Joining room: ${this.roomId} (peerId: ${this.peerId})`);
@@ -494,6 +562,12 @@ class WebRtcSyncEngine {
 
     cleanup() {
         this.clearConnectionTimeout();
+        if (this.probeWindowTimer) {
+            clearTimeout(this.probeWindowTimer);
+            this.probeWindowTimer = null;
+        }
+        this.probeWindowExpired = false;
+        this.hostToken = null;
         if (this.heartbeatTimer) {
             clearInterval(this.heartbeatTimer);
             this.heartbeatTimer = null;
@@ -528,6 +602,7 @@ class WebRtcSyncEngine {
         this.peerUsers.clear();
         this.hostName = null;
         this.connectionStatus = 'disconnected';
+        this.lastTrackChangePacketTime = 0;
 
         this.role = 'NONE';
         this.roomId = null;
@@ -540,7 +615,7 @@ class WebRtcSyncEngine {
 
         const relayUrl = `wss://broker.hivemq.com:8884/mqtt`;
         const clientId = `ytm_${this.peerId}_${Date.now()}`;
-        const topic = `ytm/sync/${this.roomId}`;
+        const topic = hashRoomTopic(this.roomId);
 
         try {
             console.log(`[WebRTC Sync] Connecting to signaling broker: ${relayUrl}`);
@@ -614,7 +689,7 @@ class WebRtcSyncEngine {
 
         const payloadString = JSON.stringify(sanitized);
         const payloadBytes = new TextEncoder().encode(payloadString);
-        const topic = `ytm/sync/${this.roomId}`;
+        const topic = hashRoomTopic(this.roomId);
         const topicBytes = new TextEncoder().encode(topic);
 
         const varHeader = [0, topicBytes.length, ...topicBytes];
@@ -712,7 +787,8 @@ class WebRtcSyncEngine {
                     hostTime: Date.now(),
                     peerId: this.peerId,
                     roomId: this.roomId,
-                    targetPeerId: peerId
+                    targetPeerId: peerId,
+                    ...(this.hostToken ? { hostToken: this.hostToken } : {})
                 });
                 return;
             } else if (type === 'ROOM_PROBE') {
@@ -722,10 +798,15 @@ class WebRtcSyncEngine {
                     peerId: this.peerId,
                     hostName: this.userName,
                     roomId: this.roomId,
-                    targetPeerId: peerId
+                    targetPeerId: peerId,
+                    ...(this.hostToken ? { hostToken: this.hostToken } : {})
                 });
                 return;
             } else if (type === 'ROOM_CLAIMED') {
+                if (this.probeWindowExpired || this.peerUsers.size > 0) {
+                    console.log(`[WebRTC Sync] Ignoring ROOM_CLAIMED after probe window expired.`);
+                    return;
+                }
                 console.warn(`[WebRTC Sync] Room conflict detected! Room ${this.roomId} is already claimed by ${signal.hostName || signal.peerId}. Regenerating room code...`);
                 const newRoomId = generateRoomCode();
                 this.leaveRoom();
@@ -754,9 +835,24 @@ class WebRtcSyncEngine {
             }
         } else {
             if (type === 'CLOCK_PONG') {
+                if (!this.hostPeerId || peerId !== this.hostPeerId) return;
+                if (this.hostToken && signal.hostToken && signal.hostToken !== this.hostToken) return;
                 this.handleClockPong(signal);
                 return;
             }
+
+            const privilegedTypes = ['ROOM_INFO', 'SYNC_STATE', 'HEARTBEAT', 'PLAY', 'PAUSE', 'SEEK', 'TRACK_CHANGE', 'QUEUE_SYNC', 'HOST_LEAVE'];
+            if (privilegedTypes.includes(type)) {
+                if (this.hostPeerId && peerId !== this.hostPeerId) {
+                    console.warn(`[Listen Together Engine] Dropping unauthorized ${type} from non-host peer: ${peerId}`);
+                    return;
+                }
+                if (this.hostToken && signal.hostToken !== this.hostToken) {
+                    console.warn(`[Listen Together Engine] Dropping unauthorized ${type}: invalid or missing hostToken from peer: ${peerId}`);
+                    return;
+                }
+            }
+
             if (['ROOM_INFO', 'SYNC_STATE', 'HEARTBEAT', 'PLAY', 'PAUSE', 'SEEK', 'TRACK_CHANGE', 'QUEUE_SYNC'].includes(type)) {
                 this.clearConnectionTimeout();
                 const wasConnecting = (this.connectionStatus === 'connecting');
@@ -768,8 +864,9 @@ class WebRtcSyncEngine {
             }
             if (type === 'ROOM_INFO') {
                 this.hostName = signal.hostName || 'Host';
-                if (peerId && (!this.clockPingTimer || this.hostPeerId !== peerId)) {
+                if (peerId && (!this.clockPingTimer || !this.hostPeerId)) {
                     this.hostPeerId = peerId;
+                    this.hostToken = signal.hostToken || null;
                     this.startClockSync();
                 }
                 this.peerUsers.clear();
@@ -783,8 +880,9 @@ class WebRtcSyncEngine {
                 this.notifyPeersChange();
             } else if (type === 'SYNC_STATE') {
                 if (signal.hostName) this.hostName = signal.hostName;
-                if (peerId && (!this.clockPingTimer || this.hostPeerId !== peerId)) {
+                if (peerId && (!this.clockPingTimer || !this.hostPeerId)) {
                     this.hostPeerId = peerId;
+                    this.hostToken = signal.hostToken || null;
                     this.startClockSync();
                 }
                 console.log(`[Listen Together Listener] Handling SYNC_STATE from host (${signal.hostName || peerId}): track="${signal.track}" (ID: ${signal.videoId}, time: ${signal.currentTime}, isPlaying: ${signal.isPlaying})`);
@@ -797,6 +895,12 @@ class WebRtcSyncEngine {
                 console.log(`[Listen Together Listener] Received ${type} from host: currentTime=${signal.currentTime}`);
                 this.onSyncAction(signal);
             } else if (type === 'TRACK_CHANGE') {
+                const now = Date.now();
+                if (now - (this.lastTrackChangePacketTime || 0) < 500) {
+                    console.warn('[Listen Together Engine] Dropping rapid TRACK_CHANGE flood');
+                    return;
+                }
+                this.lastTrackChangePacketTime = now;
                 if (signal.hostName) this.hostName = signal.hostName;
                 console.log(`[Listen Together Listener] Handling TRACK_CHANGE from host: track="${signal.track}" by "${signal.artist}" (ID: ${signal.videoId})`);
                 this.onTrackChange(signal);
@@ -805,6 +909,8 @@ class WebRtcSyncEngine {
                 console.log(`[Listen Together Listener] Received QUEUE_SYNC from host: ${signal.upcomingTracks ? signal.upcomingTracks.length : 0} upcoming tracks`);
                 this.onSyncAction(signal);
             } else if (type === 'HOST_LEAVE') {
+                if (this.hostPeerId && peerId !== this.hostPeerId) return;
+                if (this.hostToken && signal.hostToken !== this.hostToken) return;
                 console.log(`[Listen Together] Host left room: ${this.roomId}`);
                 const leftRoomId = this.roomId;
                 this.cleanup();
@@ -825,7 +931,8 @@ class WebRtcSyncEngine {
         this.publishMqttPacket({
             ...packet,
             peerId: this.peerId,
-            roomId: this.roomId
+            roomId: this.roomId,
+            ...(this.isHost && this.hostToken ? { hostToken: this.hostToken } : {})
         });
     }
 
@@ -834,7 +941,8 @@ class WebRtcSyncEngine {
             ...packet,
             peerId: this.peerId,
             roomId: this.roomId,
-            targetPeerId: peerId
+            targetPeerId: peerId,
+            ...(this.isHost && this.hostToken ? { hostToken: this.hostToken } : {})
         });
     }
 
@@ -947,9 +1055,11 @@ if (typeof module !== 'undefined' && module.exports) {
         DRIFT_TOLERANCE_MS,
         SOFT_CATCHUP_MAX_MS,
         HARD_SEEK_THRESHOLD_MS,
-        DEFAULT_ICE_SERVERS,
         generateRoomCode,
         validateVideoId,
+        validateRoomId,
+        sanitizeImageUrl,
+        hashRoomTopic,
         sanitizePacket,
         calculateDrift,
         calculateAdCatchUpTime,
@@ -965,6 +1075,9 @@ if (typeof window !== 'undefined') {
     window.BrokerSyncEngine = WebRtcSyncEngine;
     window.ytmGenerateRoomCode = generateRoomCode;
     window.ytmValidateVideoId = validateVideoId;
+    window.ytmValidateRoomId = validateRoomId;
+    window.ytmSanitizeImageUrl = sanitizeImageUrl;
+    window.ytmHashRoomTopic = hashRoomTopic;
     window.ytmSanitizePacket = sanitizePacket;
     window.ytmCalculateDrift = calculateDrift;
     window.ytmCalculateAdCatchUpTime = calculateAdCatchUpTime;

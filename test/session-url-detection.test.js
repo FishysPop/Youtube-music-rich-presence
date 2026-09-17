@@ -298,5 +298,52 @@ test('parseSessionInput safely rejects empty and invalid inputs', () => {
     assert.strictEqual(parseSessionInput('invalid!!'), null);
 });
 
+function isGatewayUrl(urlStr) {
+    if (!urlStr || typeof urlStr !== 'string') return false;
+    try {
+        const u = new URL(urlStr);
+        return u.protocol === 'https:' &&
+               u.hostname === 'fishyspop.github.io' &&
+               (u.pathname === '/Youtube-music-rich-presence' || u.pathname.startsWith('/Youtube-music-rich-presence/'));
+    } catch (e) {
+        return false;
+    }
+}
+
+function isYouTubeMusicUrl(urlStr) {
+    if (!urlStr || typeof urlStr !== 'string') return false;
+    try {
+        const u = new URL(urlStr);
+        return (u.protocol === 'https:' || u.protocol === 'http:') && u.hostname === 'music.youtube.com';
+    } catch (e) {
+        return false;
+    }
+}
+
+test('isGatewayUrl strictly validates authentic GitHub Pages gateway URLs', () => {
+    assert.strictEqual(isGatewayUrl('https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=YTM-ABC123'), true);
+    assert.strictEqual(isGatewayUrl('https://fishyspop.github.io/Youtube-music-rich-presence/#session=YTM-ABC123'), true);
+    assert.strictEqual(isGatewayUrl('https://fishyspop.github.io/Youtube-music-rich-presence'), true);
+    assert.strictEqual(isGatewayUrl('https://fishyspop.github.io/Youtube-music-rich-presence/'), true);
+});
+
+test('isGatewayUrl rejects rogue, spoofed, or non-HTTPS domains', () => {
+    assert.strictEqual(isGatewayUrl('https://evil-fishyspop.github.io.attacker.com/?session=YTM-ABC123'), false);
+    assert.strictEqual(isGatewayUrl('https://attacker.com/fishyspop.github.io/?session=YTM-ABC123'), false);
+    assert.strictEqual(isGatewayUrl('https://attacker.com/Youtube-music-rich-presence/?session=YTM-ABC123'), false);
+    assert.strictEqual(isGatewayUrl('http://fishyspop.github.io/Youtube-music-rich-presence/'), false);
+    assert.strictEqual(isGatewayUrl('https://fishyspop.github.io/other-project/?session=YTM-ABC123'), false);
+    assert.strictEqual(isGatewayUrl('javascript:alert(1)'), false);
+    assert.strictEqual(isGatewayUrl(''), false);
+    assert.strictEqual(isGatewayUrl(null), false);
+});
+
+test('isYouTubeMusicUrl strictly validates music.youtube.com domain', () => {
+    assert.strictEqual(isYouTubeMusicUrl('https://music.youtube.com/watch?v=dQw4w9WgXcQ'), true);
+    assert.strictEqual(isYouTubeMusicUrl('https://music.youtube.com/'), true);
+    assert.strictEqual(isYouTubeMusicUrl('https://evil.music.youtube.com.attacker.com/'), false);
+    assert.strictEqual(isYouTubeMusicUrl('https://attacker.com/music.youtube.com'), false);
+});
+
 console.log(`\nTests completed: ${passedCount}/${testCount} passed.`);
 

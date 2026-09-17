@@ -148,23 +148,20 @@ function updateStatus(newStatus, errorMessage = undefined, rpcUser = undefined, 
     }
 }
 
-function _sendSetActivityToNativeHost(activityData) {
+const MIN_ACTIVITY_INTERVAL_MS = 2500;
+const MAX_ACTIVITIES_PER_WINDOW = 4;
+const ACTIVITY_WINDOW_MS = 20000;
+
+let outboundActivityTimestamps = [];
+let queuedOutboundActivity = null;
+let outboundActivityTimer = null;
+
+function _executeSendSetActivityToNativeHost(sanitizedData) {
     if (!port) {
         console.warn('[YTM RPC Background] Attempted to send SET_ACTIVITY, but native host port is not connected.');
         return;
     }
     try {
-        const sanitizedData = { ...activityData };
-        if (!sanitizedData.largeImageText) {
-            delete sanitizedData.largeImageText;
-        }
-        if (!sanitizedData.album) {
-            delete sanitizedData.album;
-        }
-        if (Array.isArray(sanitizedData.buttons) && sanitizedData.buttons.length > 2) {
-            console.warn(`[YTM RPC Background] Truncating ${sanitizedData.buttons.length} buttons to Discord's max of 2.`);
-            sanitizedData.buttons = sanitizedData.buttons.slice(0, 2);
-        }
         console.log('[YTM RPC Background] Posting SET_ACTIVITY to native host. Details:', {
             track: sanitizedData.details,
             artist: sanitizedData.state,
@@ -180,11 +177,76 @@ function _sendSetActivityToNativeHost(activityData) {
         console.log('Background: Sent SET_ACTIVITY to native host:', sanitizedData);
     } catch (error) {
         console.error('Background: Error posting SET_ACTIVITY to native host:', error);
-        handlePortError(error, activityData);
+        handlePortError(error, sanitizedData);
     }
 }
 
+function scheduleOutboundActivity() {
+    if (outboundActivityTimer) {
+        return;
+    }
+    if (!queuedOutboundActivity) {
+        return;
+    }
+    if (!isRpcReady || !port) {
+        return;
+    }
+
+    const now = Date.now();
+    outboundActivityTimestamps = outboundActivityTimestamps.filter(t => (now - t) < ACTIVITY_WINDOW_MS);
+
+    let delay = 0;
+    if (outboundActivityTimestamps.length > 0) {
+        const lastDispatch = outboundActivityTimestamps[outboundActivityTimestamps.length - 1];
+        const timeSinceLast = now - lastDispatch;
+        if (timeSinceLast < MIN_ACTIVITY_INTERVAL_MS) {
+            delay = Math.max(delay, MIN_ACTIVITY_INTERVAL_MS - timeSinceLast);
+        }
+    }
+
+    if (outboundActivityTimestamps.length >= MAX_ACTIVITIES_PER_WINDOW) {
+        const oldestInWindow = outboundActivityTimestamps[0];
+        const waitToClearWindow = (oldestInWindow + ACTIVITY_WINDOW_MS) - now + 50;
+        delay = Math.max(delay, waitToClearWindow);
+    }
+
+    if (delay <= 0) {
+        const payloadToDispatch = queuedOutboundActivity;
+        queuedOutboundActivity = null;
+        outboundActivityTimestamps.push(Date.now());
+        _executeSendSetActivityToNativeHost(payloadToDispatch);
+    } else {
+        outboundActivityTimer = setTimeout(() => {
+            outboundActivityTimer = null;
+            scheduleOutboundActivity();
+        }, delay);
+    }
+}
+
+function _sendSetActivityToNativeHost(activityData) {
+    if (!activityData) return;
+    const sanitizedData = { ...activityData };
+    if (!sanitizedData.largeImageText) {
+        delete sanitizedData.largeImageText;
+    }
+    if (!sanitizedData.album) {
+        delete sanitizedData.album;
+    }
+    if (Array.isArray(sanitizedData.buttons) && sanitizedData.buttons.length > 2) {
+        console.warn(`[YTM RPC Background] Truncating ${sanitizedData.buttons.length} buttons to Discord's max of 2.`);
+        sanitizedData.buttons = sanitizedData.buttons.slice(0, 2);
+    }
+    queuedOutboundActivity = sanitizedData;
+    scheduleOutboundActivity();
+}
+
 function _sendClearActivityToNativeHost() {
+    if (outboundActivityTimer) {
+        clearTimeout(outboundActivityTimer);
+        outboundActivityTimer = null;
+    }
+    queuedOutboundActivity = null;
+
     if (!port) {
         console.warn('Background: Attempted to send CLEAR_ACTIVITY, but native host port is not connected.');
         return;
@@ -205,6 +267,10 @@ function handlePortError(error, activityContextIfSet) {
         if (port) {
             port.onDisconnect.removeListener(onPortDisconnectHandler);
             port = null;
+        }
+        if (outboundActivityTimer) {
+            clearTimeout(outboundActivityTimer);
+            outboundActivityTimer = null;
         }
         isRpcReady = false;
         if (activityContextIfSet) {
@@ -245,6 +311,10 @@ const onPortDisconnectHandler = () => {
 
     if (port) {
         port.onDisconnect.removeListener(onPortDisconnectHandler);
+    }
+    if (outboundActivityTimer) {
+        clearTimeout(outboundActivityTimer);
+        outboundActivityTimer = null;
     }
     port = null;
     isRpcReady = false;
@@ -442,13 +512,17 @@ function connectToNativeHost() {
                     break;
                 case 'error':
                 case 'clear_error':
-                    isRpcReady = false;
-                    updateStatus('native_connected', message.message, null, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
-                    chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
-                        if (result.autoReconnectEnabled && !isManuallyDisconnected && !userDisconnected) {
-                            scheduleReconnect(reconnectDiscordRpcOnly);
+                    console.warn('Background: Native host reported activity update error:', message.message);
+                    updateStatus('rpc_ready', undefined, currentRpcUser, pendingActivity || currentActivity, nativeHostVersion, nativeHostVersionMismatch);
+                    if (pendingActivity && isRpcReady && port) {
+                        queuedOutboundActivity = pendingActivity;
+                        if (!outboundActivityTimer) {
+                            outboundActivityTimer = setTimeout(() => {
+                                outboundActivityTimer = null;
+                                scheduleOutboundActivity();
+                            }, 3500);
                         }
-                    });
+                    }
                     break;
                 default:
                     console.warn('Background: Received unknown ACTIVITY_STATUS status:', message.status);
@@ -837,6 +911,11 @@ function reconnectDiscordRpcOnly() {
 function processClearActivity(isPauseTimeout = false) {
   currentActivity = null;
   pendingActivity = null;
+  queuedOutboundActivity = null;
+  if (outboundActivityTimer) {
+      clearTimeout(outboundActivityTimer);
+      outboundActivityTimer = null;
+  }
   if (!isPauseTimeout) {
       currentSongActivity = null;
       pausedTimestamp = null;
@@ -1135,7 +1214,12 @@ function parseSessionInput(rawInput) {
 }
 
 function handleGatewayJoinSession(roomId, senderTabId, sendResponse) {
-  const normalizedRoomId = parseSessionInput(roomId) || (typeof roomId === 'string' ? roomId.trim().toUpperCase() : null);
+  if (roomId === 'PING' || roomId === 'CHECK') {
+    if (sendResponse) sendResponse({ success: true, action: 'PING' });
+    return;
+  }
+
+  const normalizedRoomId = parseSessionInput(roomId);
   if (!normalizedRoomId) {
     if (sendResponse) sendResponse({ success: false, error: 'Missing or invalid room ID' });
     return;
@@ -1216,10 +1300,32 @@ if (chrome.runtime.onMessageExternal) {
   });
 }
 
+function isGatewayUrl(urlStr) {
+  if (!urlStr || typeof urlStr !== 'string') return false;
+  try {
+    const u = new URL(urlStr);
+    return u.protocol === 'https:' &&
+           u.hostname === 'fishyspop.github.io' &&
+           (u.pathname === '/Youtube-music-rich-presence' || u.pathname.startsWith('/Youtube-music-rich-presence/'));
+  } catch (e) {
+    return false;
+  }
+}
+
+function isYouTubeMusicUrl(urlStr) {
+  if (!urlStr || typeof urlStr !== 'string') return false;
+  try {
+    const u = new URL(urlStr);
+    return (u.protocol === 'https:' || u.protocol === 'http:') && u.hostname === 'music.youtube.com';
+  } catch (e) {
+    return false;
+  }
+}
+
 if (chrome.tabs && chrome.tabs.onCreated) {
   chrome.tabs.onCreated.addListener((tab) => {
     const targetUrl = tab.pendingUrl || tab.url;
-    if (!targetUrl || !targetUrl.includes('fishyspop.github.io')) return;
+    if (!targetUrl || !isGatewayUrl(targetUrl)) return;
     const sessionMatch = targetUrl.match(/[?#&](?:ytm-session|session)=([a-zA-Z0-9_-]+)/i);
     if (sessionMatch && sessionMatch[1]) {
       handleGatewayJoinSession(sessionMatch[1].toUpperCase(), tab.id);
@@ -1235,12 +1341,12 @@ if (chrome.tabs && chrome.tabs.onUpdated) {
     const roomId = parseSessionInput(targetUrl);
     if (!roomId) return;
 
-    if (targetUrl.includes('fishyspop.github.io')) {
+    if (isGatewayUrl(targetUrl)) {
       handleGatewayJoinSession(roomId, tabId);
       return;
     }
 
-    if (targetUrl.includes('music.youtube.com')) {
+    if (isYouTubeMusicUrl(targetUrl)) {
       const isSelfHost = (activeSessionRole === 'HOST' && activeSessionRoomId === roomId);
       const isAlreadyListening = (activeSessionRole === 'LISTENER' && activeSessionRoomId === roomId);
 

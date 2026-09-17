@@ -986,7 +986,8 @@ function renderSessionQueuePanel() {
 
   const hostName = (syncEngine && syncEngine.hostName) ? syncEngine.hostName : 'Host';
   const trackItemsHtml = latestSessionUpcomingTracks.map((t) => {
-    const thumbUrl = t.albumArtUrl || t.thumbnail || (t.videoId ? `https://i.ytimg.com/vi/${t.videoId}/default.jpg` : '');
+    const sanitizeImg = window.ytmSanitizeImageUrl || ((u, v) => (v ? `https://i.ytimg.com/vi/${v}/default.jpg` : ''));
+    const thumbUrl = sanitizeImg(t.albumArtUrl || t.thumbnail, t.videoId);
     const thumbHtml = thumbUrl
       ? `<img src="${escapeHtml(thumbUrl)}" style="width:40px; height:40px; border-radius:4px; object-fit:cover; margin-right:16px; flex-shrink:0; background:#1f1f1f;" />`
       : `<div style="width:40px; height:40px; border-radius:4px; margin-right:16px; flex-shrink:0; background:#1f1f1f;"></div>`;
@@ -2128,7 +2129,7 @@ function renderPopoverContent() {
       </div>
 
       <div style="padding:10px 16px 8px 16px; display:flex; gap:8px; align-items:center;">
-        <input type="text" readonly value="${roomId}" id="ytm-popover-room-input" title="Room Code" style="background:#181818; border:1px solid rgba(255, 255, 255, 0.15); border-radius:4px; height:32px; padding:0 10px; color:#ffffff; font-size:13px; letter-spacing:0.5px; font-family:monospace; font-weight:600; outline:none; flex:1; box-sizing:border-box; min-width:0; cursor:text; user-select:all; -webkit-user-select:all;">
+        <input type="text" readonly value="${escapeHtml(roomId)}" id="ytm-popover-room-input" title="Room Code" style="background:#181818; border:1px solid rgba(255, 255, 255, 0.15); border-radius:4px; height:32px; padding:0 10px; color:#ffffff; font-size:13px; letter-spacing:0.5px; font-family:monospace; font-weight:600; outline:none; flex:1; box-sizing:border-box; min-width:0; cursor:text; user-select:all; -webkit-user-select:all;">
         <button id="ytm-popover-copy-btn" style="background:transparent; color:#3ea6ff; border:none; border-radius:2px; height:32px; padding:0 8px; font-size:12px; font-weight:500; cursor:pointer; text-transform:uppercase; letter-spacing:0.3px; transition:background 0.15s; flex-shrink:0;">
           Copy Link
         </button>
@@ -2157,7 +2158,7 @@ function renderPopoverContent() {
       copyBtn.onmouseleave = () => { copyBtn.style.background = 'transparent'; };
       copyBtn.onclick = (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
-        const url = `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${roomId}`;
+        const url = `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${encodeURIComponent(roomId)}`;
         navigator.clipboard.writeText(url).then(() => {
           copyBtn.textContent = 'Copied!';
           setTimeout(() => { copyBtn.textContent = 'Copy Link'; }, 2000);
@@ -2458,7 +2459,7 @@ function onVideoEvent(e) {
       }
     }
   } else {
-    updateTrackInfo(true);
+    updateTrackInfo(false);
   }
 }
 
@@ -2909,7 +2910,6 @@ navigationFinishListener = () => {
   }
   pauseGracePeriodExpired = false;
   checkUrlSession();
-  updateTrackInfo(true);
   updateTrackInfo(false);
   disableAutoplayForConnectedClient();
 };

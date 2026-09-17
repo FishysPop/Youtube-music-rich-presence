@@ -425,4 +425,8 @@ async function waitForAdToFinishOrSkip(ws, targetExpectedVid, timeoutMs = 20000)
   }
 }
 
-runDualBrowserTest();
+runDualBrowserTest().then(() => {
+  process.exit(process.exitCode || 0);
+}).catch(() => {
+  process.exit(1);
+});
