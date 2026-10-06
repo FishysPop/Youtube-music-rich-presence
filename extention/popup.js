@@ -1,3 +1,15 @@
+function resolveTimeoutSelection(storedValue, presetValues) {
+  const val = parseInt(storedValue, 10);
+  if (isNaN(val) || val <= 0) {
+    return { isCustom: false, selectValue: "0", customValue: null };
+  }
+  if (presetValues.includes(val)) {
+    return { isCustom: false, selectValue: String(val), customValue: String(val) };
+  }
+  return { isCustom: true, selectValue: "custom", customValue: String(val) };
+}
+
+if (typeof document !== 'undefined') {
 document.addEventListener("DOMContentLoaded", () => {
   let errorLogs = [];
   function addToLog(msg) {
@@ -21,7 +33,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const logContent = document.getElementById("logContent");
   const hideOptionsButton = document.getElementById("hideOptionsButton");
   const autoReconnectCheckbox = document.getElementById("autoReconnectCheckbox");
-  const pauseTimeoutInput = document.getElementById("pauseTimeoutInput");
+  const disableButtonsCheckbox = document.getElementById("disableButtonsCheckbox");
+  const pauseTimeoutSelect = document.getElementById("pauseTimeoutSelect");
+  const pauseTimeoutCustomContainer = document.getElementById("pauseTimeoutCustomContainer");
+  const pauseTimeoutCustomInput = document.getElementById("pauseTimeoutCustomInput");
 
   const nativeHostStatusElement = document.getElementById("nativeHostStatus");
   const rpcStatusElement = document.getElementById("rpcStatus");
@@ -60,24 +75,94 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  if (pauseTimeoutInput) {
-    chrome.storage.local.get({ pauseTimeoutMinutes: -1 }, (result) => {
-      pauseTimeoutInput.value = result.pauseTimeoutMinutes;
+  if (disableButtonsCheckbox) {
+    chrome.storage.local.get({ disableButtons: false }, (result) => {
+      disableButtonsCheckbox.checked = Boolean(result.disableButtons);
     });
 
-    pauseTimeoutInput.addEventListener("change", () => {
-      let value = parseInt(pauseTimeoutInput.value);
-      if (isNaN(value) || value < -1) {
-        value = -1;
-        pauseTimeoutInput.value = -1;
-      } else if (value > 60) {
-        value = 60;
-        pauseTimeoutInput.value = 60;
-      }
-      
-      chrome.storage.local.set({ pauseTimeoutMinutes: value });
+    disableButtonsCheckbox.addEventListener("change", () => {
+      chrome.storage.local.set({ disableButtons: disableButtonsCheckbox.checked });
     });
   }
+
+  function setupTimeoutSetting({
+    selectEl,
+    customContainerEl,
+    customInputEl,
+    storageKey,
+    defaultValue,
+    defaultCustomValue,
+    neverSaveValue
+  }) {
+    if (!selectEl) return;
+
+    const presetValues = Array.from(selectEl.options)
+      .map((opt) => opt.value)
+      .filter((val) => val !== "custom")
+      .map((val) => parseInt(val, 10));
+
+    chrome.storage.local.get({ [storageKey]: defaultValue }, (result) => {
+      const resolution = resolveTimeoutSelection(result[storageKey] ?? defaultValue, presetValues);
+      selectEl.value = resolution.selectValue;
+      if (resolution.isCustom) {
+        if (customContainerEl) customContainerEl.style.display = "flex";
+        if (customInputEl) customInputEl.value = resolution.customValue;
+      } else {
+        if (customContainerEl) customContainerEl.style.display = "none";
+        if (customInputEl) customInputEl.value = String(defaultCustomValue);
+      }
+    });
+
+    selectEl.addEventListener("change", () => {
+      if (selectEl.value === "custom") {
+        if (customContainerEl) customContainerEl.style.display = "flex";
+        if (customInputEl) {
+          let customVal = parseInt(customInputEl.value, 10);
+          if (isNaN(customVal) || customVal <= 0) {
+            customVal = defaultCustomValue;
+            customInputEl.value = String(customVal);
+          }
+          chrome.storage.local.set({ [storageKey]: customVal });
+          customInputEl.focus();
+        }
+      } else {
+        if (customContainerEl) customContainerEl.style.display = "none";
+        const presetVal = parseInt(selectEl.value, 10);
+        const toSave = presetVal <= 0 ? neverSaveValue : presetVal;
+        chrome.storage.local.set({ [storageKey]: toSave });
+      }
+    });
+
+    if (customInputEl) {
+      const saveCustom = () => {
+        if (selectEl.value !== "custom") return;
+        let val = parseInt(customInputEl.value, 10);
+        if (!isNaN(val) && val > 0) {
+          chrome.storage.local.set({ [storageKey]: val });
+        }
+      };
+
+      customInputEl.addEventListener("input", saveCustom);
+      customInputEl.addEventListener("change", () => {
+        saveCustom();
+        let val = parseInt(customInputEl.value, 10);
+        if (isNaN(val) || val <= 0) {
+          customInputEl.value = String(defaultCustomValue);
+          chrome.storage.local.set({ [storageKey]: defaultCustomValue });
+        }
+      });
+    }
+  }
+
+  setupTimeoutSetting({
+    selectEl: pauseTimeoutSelect,
+    customContainerEl: pauseTimeoutCustomContainer,
+    customInputEl: pauseTimeoutCustomInput,
+    storageKey: "pauseTimeoutMinutes",
+    defaultValue: -1,
+    defaultCustomValue: 10,
+    neverSaveValue: -1
+  });
 
   function updatePopupUI(
     status,
@@ -269,17 +354,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const sessionStatusDetail = document.getElementById("sessionStatusDetail");
   const leaveSessionBtn = document.getElementById("leaveSessionBtn");
   const autoStopSelect = document.getElementById("autoStopSelect");
+  const autoStopCustomContainer = document.getElementById("autoStopCustomContainer");
+  const autoStopCustomInput = document.getElementById("autoStopCustomInput");
 
-  if (autoStopSelect) {
-    chrome.storage.local.get({ autoStopHostingTimeoutMinutes: 30 }, (result) => {
-      autoStopSelect.value = String(result.autoStopHostingTimeoutMinutes ?? 30);
-    });
-
-    autoStopSelect.addEventListener("change", () => {
-      const val = parseInt(autoStopSelect.value, 10);
-      chrome.storage.local.set({ autoStopHostingTimeoutMinutes: isNaN(val) ? 30 : val });
-    });
-  }
+  setupTimeoutSetting({
+    selectEl: autoStopSelect,
+    customContainerEl: autoStopCustomContainer,
+    customInputEl: autoStopCustomInput,
+    storageKey: "autoStopHostingTimeoutMinutes",
+    defaultValue: 30,
+    defaultCustomValue: 45,
+    neverSaveValue: 0
+  });
 
   function updateListenSessionUI(state) {
     if (!listenSessionBadge || !listenIdleView || !listenActiveView) return;
@@ -469,4 +555,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 });
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    resolveTimeoutSelection
+  };
+}
 

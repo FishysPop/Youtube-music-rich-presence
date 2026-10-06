@@ -21,6 +21,35 @@
         --error: #f04747;
         --pending: #faa61a;
       }
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+      }
+      ::-webkit-scrollbar {
+        width: 5px;
+        height: 5px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 9999px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.35);
+      }
+      ::-webkit-scrollbar-thumb:active {
+        background: rgba(255, 255, 255, 0.5);
+      }
+      ::-webkit-scrollbar-corner {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-button {
+        display: none;
+        width: 0;
+        height: 0;
+      }
       html,
       body {
         width: 285px;
@@ -155,6 +184,20 @@
       button:last-child:focus {
         background: #232f4a;
         color: #aeb8e6;
+      }
+      #hideOptionsButton {
+        flex: initial;
+        background: #23262f;
+        color: #faa61a;
+        border: 1px solid #faa61a;
+        padding: 4px 12px;
+        font-size: 0.85em;
+      }
+      #hideOptionsButton:hover,
+      #hideOptionsButton:focus {
+        background: #2f2a23;
+        color: #ffb84d;
+        border-color: #ffb84d;
       }
     </style>
   </head>
@@ -350,59 +393,142 @@
         "
       >
         <label
-          for="pauseTimeoutInput"
+          for="disableButtonsCheckbox"
           style="margin-right: 8px; cursor: pointer"
-          >Hide after paused (min):</label
+          >Disable Buttons in Status:</label
         >
         <input
-          type="number"
-          id="pauseTimeoutInput"
-          style="
-            cursor: pointer;
-            width: 45px;
-            padding: 2px 5px;
-            background: #23262f;
-            color: var(--text);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-          "
-          min="-1"
-          max="60"
-          value="-1"
+          type="checkbox"
+          id="disableButtonsCheckbox"
+          style="cursor: pointer"
         />
       </div>
-      <div
-        style="
-          margin-top: 10px;
-          margin-bottom: 12px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-        "
-      >
-        <label
-          for="autoStopSelect"
-          style="margin-right: 8px; cursor: pointer"
-          >Auto-stop Listen together when empty:</label
-        >
-        <select
-          id="autoStopSelect"
+      <div style="margin-top: 10px; margin-bottom: 10px;">
+        <div
           style="
-            cursor: pointer;
-            padding: 2px 5px;
-            background: #23262f;
-            color: var(--text);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            font-size: 0.9em;
-            outline: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
           "
         >
-          <option value="15">15 min</option>
-          <option value="30" selected>30 min</option>
-          <option value="60">1 hour</option>
-          <option value="0">Never</option>
-        </select>
+          <label
+            for="pauseTimeoutSelect"
+            style="margin-right: 8px; cursor: pointer"
+            >Hide after paused:</label
+          >
+          <select
+            id="pauseTimeoutSelect"
+            style="
+              cursor: pointer;
+              padding: 2px 5px;
+              background: #23262f;
+              color: var(--text);
+              border: 1px solid var(--border);
+              border-radius: 4px;
+              font-size: 0.9em;
+              outline: none;
+            "
+          >
+            <option value="0">Never</option>
+            <option value="1">1 min</option>
+            <option value="5">5 min</option>
+            <option value="15">15 min</option>
+            <option value="30">30 min</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div
+          id="pauseTimeoutCustomContainer"
+          style="
+            display: none;
+            margin-top: 6px;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+          "
+        >
+          <span style="font-size: 0.85em; color: var(--text-muted)">Custom (min):</span>
+          <input
+            type="number"
+            id="pauseTimeoutCustomInput"
+            min="1"
+            max="1440"
+            style="
+              cursor: pointer;
+              width: 50px;
+              padding: 2px 5px;
+              background: #23262f;
+              color: var(--text);
+              border: 1px solid var(--border);
+              border-radius: 4px;
+              font-size: 0.9em;
+              outline: none;
+            "
+          />
+        </div>
+      </div>
+      <div style="margin-top: 10px; margin-bottom: 12px;">
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+          "
+        >
+          <label
+            for="autoStopSelect"
+            style="margin-right: 8px; cursor: pointer"
+            >Auto-stop Listen together when empty:</label
+          >
+          <select
+            id="autoStopSelect"
+            style="
+              cursor: pointer;
+              padding: 2px 5px;
+              background: #23262f;
+              color: var(--text);
+              border: 1px solid var(--border);
+              border-radius: 4px;
+              font-size: 0.9em;
+              outline: none;
+            "
+          >
+            <option value="15">15 min</option>
+            <option value="30" selected>30 min</option>
+            <option value="60">1 hour</option>
+            <option value="0">Never</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div
+          id="autoStopCustomContainer"
+          style="
+            display: none;
+            margin-top: 6px;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+          "
+        >
+          <span style="font-size: 0.85em; color: var(--text-muted)">Custom (min):</span>
+          <input
+            type="number"
+            id="autoStopCustomInput"
+            min="1"
+            max="1440"
+            style="
+              cursor: pointer;
+              width: 50px;
+              padding: 2px 5px;
+              background: #23262f;
+              color: var(--text);
+              border: 1px solid var(--border);
+              border-radius: 4px;
+              font-size: 0.9em;
+              outline: none;
+            "
+          />
+        </div>
       </div>
       <div style="margin-bottom: 8px; color: #faa61a; font-weight: bold">
         Error Log
@@ -421,18 +547,9 @@
           overflow: auto;
         "
       ></pre>
-      <button
-        id="hideOptionsButton"
-        style="
-          margin-top: 10px;
-          float: right;
-          background: #23262f;
-          color: #faa61a;
-          border: 1px solid #faa61a;
-        "
-      >
-        Close
-      </button>
+      <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+        <button id="hideOptionsButton">Close</button>
+      </div>
     </div>
 
     <script src="popup.js"></script>

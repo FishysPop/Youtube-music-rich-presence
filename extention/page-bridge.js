@@ -1,42 +1,46 @@
 (() => {
-  if (window.__ytmPageBridgeInstalled) return;
-  window.__ytmPageBridgeInstalled = true;
+  if (typeof window !== 'undefined' && window.__ytmPageBridgeInstalled) return;
+  if (typeof window !== 'undefined') window.__ytmPageBridgeInstalled = true;
 
   function bridgeLog(msg) {
     console.log(`[YTM Page Bridge] ${msg}`);
     try {
-      window.postMessage({ source: 'ytm-page-bridge-log', message: msg }, '*');
+      if (typeof window !== 'undefined' && typeof window.postMessage === 'function') {
+        window.postMessage({ source: 'ytm-page-bridge-log', message: msg }, '*');
+      }
     } catch (e) {}
   }
 
   bridgeLog('Script successfully installed in MAIN world');
 
-  window.addEventListener('beforeunload', (e) => {
-    e.stopImmediatePropagation();
-    delete e.returnValue;
-  }, true);
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('beforeunload', (e) => {
+      e.stopImmediatePropagation();
+      delete e.returnValue;
+    }, true);
 
-  try {
-    Object.defineProperty(window, 'onbeforeunload', {
-      get: () => null,
-      set: () => {},
-      configurable: true
-    });
-  } catch (e) {}
+    try {
+      Object.defineProperty(window, 'onbeforeunload', {
+        get: () => null,
+        set: () => {},
+        configurable: true
+      });
+    } catch (e) {}
 
-  try {
-    Object.defineProperty(window, 'onunload', {
-      get: () => null,
-      set: () => {},
-      configurable: true
-    });
-  } catch (e) {}
+    try {
+      Object.defineProperty(window, 'onunload', {
+        get: () => null,
+        set: () => {},
+        configurable: true
+      });
+    } catch (e) {}
 
-  const origAddEventListener = window.addEventListener;
-  window.addEventListener = function(type, listener, options) {
-    if (type === 'beforeunload' || type === 'unload') return;
-    return origAddEventListener.call(this, type, listener, options);
-  };
+    const origAddEventListener = window.addEventListener;
+    window.addEventListener = function(type, listener, options) {
+      if (type === 'beforeunload' || type === 'unload') return;
+      return origAddEventListener.call(this, type, listener, options);
+    };
+  }
 
   try {
     const origETAdd = EventTarget.prototype.addEventListener;
@@ -46,7 +50,9 @@
     };
   } catch (e) {}
 
-  window.__syncedUpcomingTracks = [];
+  if (typeof window !== 'undefined') {
+    window.__syncedUpcomingTracks = [];
+  }
 
   function sanitizeImageUrl(url, videoId) {
     if (!url || typeof url !== 'string') {
@@ -496,13 +502,14 @@
     } catch (e) {}
   }
 
-  window.addEventListener('message', (event) => {
-    if (event.source !== window || !event.data || event.data.source !== 'ytm-sync-isolated') return;
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('message', (event) => {
+      if (event.source !== window || !event.data || event.data.source !== 'ytm-sync-isolated') return;
 
-    const { action, videoId, currentTime, rate, isPlaying, track, artist, albumArtUrl, upcomingTracks, playlistId, playlistIndex } = event.data;
-    const player = document.getElementById('movie_player') ||
-                   document.querySelector('ytmusic-player') ||
-                   document.querySelector('#player');
+      const { action, videoId, currentTime, rate, isPlaying, track, artist, albumArtUrl, upcomingTracks, playlistId, playlistIndex } = event.data;
+      const player = document.getElementById('movie_player') ||
+                     document.querySelector('ytmusic-player') ||
+                     document.querySelector('#player');
 
     if (action === 'SET_CLIENT_ROLE') {
       isListenerConnected = (event.data.role === 'LISTENER');
@@ -611,8 +618,11 @@
       } catch (e) {}
     }
   });
+  }
 
-  window.__getYtmUpcomingTracks = getUpcomingTracksFromQueue;
+  if (typeof window !== 'undefined') {
+    window.__getYtmUpcomingTracks = getUpcomingTracksFromQueue;
+  }
 
   function checkIsAd() {
     const player = document.getElementById('movie_player') ||
@@ -635,11 +645,84 @@
   let isAdActive = false;
   let lastBroadcastQueueJson = '';
   let lastBroadcastList = null;
+  let lastBroadcastMediaJson = '';
+
+  function getBridgeMediaData() {
+    const ms = (typeof navigator !== 'undefined' && navigator.mediaSession) ? navigator.mediaSession : null;
+    const meta = ms ? ms.metadata : null;
+    const player = (typeof document !== 'undefined') ? (
+      document.getElementById('movie_player') ||
+      (typeof document.querySelector === 'function' ? (document.querySelector('ytmusic-player') || document.querySelector('#player')) : null)
+    ) : null;
+    const videoData = (player && typeof player.getVideoData === 'function') ? player.getVideoData() : null;
+    const playerState = (player && typeof player.getPlayerState === 'function') ? player.getPlayerState() : null;
+
+    let title = (meta && meta.title ? meta.title : (videoData && videoData.title ? videoData.title : '')).trim();
+    let artist = (meta && meta.artist ? meta.artist : (videoData && videoData.author ? videoData.author : '')).trim();
+    let album = (meta && meta.album && typeof meta.album === 'string' && meta.album.trim()) ? meta.album.trim() : null;
+
+    let artwork = null;
+    if (meta && Array.isArray(meta.artwork) && meta.artwork.length > 0) {
+      let maxArea = -1;
+      for (const item of meta.artwork) {
+        if (!item || !item.src) continue;
+        let area = 0;
+        if (item.sizes && typeof item.sizes === 'string') {
+          const parts = item.sizes.split('x').map(Number);
+          if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            area = parts[0] * parts[1];
+          }
+        }
+        if (area > maxArea) {
+          maxArea = area;
+          artwork = item.src;
+        }
+      }
+      if (!artwork) {
+        artwork = meta.artwork[meta.artwork.length - 1]?.src || null;
+      }
+    }
+
+    let isPlaying = null;
+    if (ms && (ms.playbackState === 'playing' || ms.playbackState === 'paused')) {
+      isPlaying = ms.playbackState === 'playing';
+    } else if (playerState !== null) {
+      if (playerState === 1) isPlaying = true;
+      else if (playerState === 2) isPlaying = false;
+    }
+
+    let duration = null;
+    let currentTime = null;
+    if (player) {
+      if (typeof player.getDuration === 'function') {
+        const d = player.getDuration();
+        if (typeof d === 'number' && !isNaN(d) && d > 0) duration = Math.floor(d);
+      }
+      if (typeof player.getCurrentTime === 'function') {
+        const ct = player.getCurrentTime();
+        if (typeof ct === 'number' && !isNaN(ct) && ct >= 0) currentTime = Math.floor(ct);
+      }
+    }
+
+    const videoId = (videoData && videoData.video_id) || null;
+
+    return {
+      title,
+      artist,
+      album,
+      artwork,
+      isPlaying,
+      videoId,
+      duration,
+      currentTime
+    };
+  }
 
   function updatePlayerBridgeData() {
-    const player = document.getElementById('movie_player') ||
-                   document.querySelector('ytmusic-player') ||
-                   document.querySelector('#player');
+    const player = (typeof document !== 'undefined') ? (
+      document.getElementById('movie_player') ||
+      (typeof document.querySelector === 'function' ? (document.querySelector('ytmusic-player') || document.querySelector('#player')) : null)
+    ) : null;
     let vid = null;
     let list = null;
     let playlistIndex = -1;
@@ -659,29 +742,63 @@
     }
     if (!vid || !/^[a-zA-Z0-9_-]{11}$/.test(vid)) {
       try {
-        const app = document.querySelector('ytmusic-app');
+        const app = (typeof document !== 'undefined' && typeof document.querySelector === 'function') ? document.querySelector('ytmusic-app') : null;
         const state = app && typeof app.getState === 'function' ? app.getState() : null;
         vid = state?.player?.playerResponse?.videoDetails?.videoId ||
               extractQueueTrackItem(state?.queue?.items?.[state?.queue?.selectedItemIndex])?.videoId;
       } catch (e) {}
     }
     if (vid && /^[a-zA-Z0-9_-]{11}$/.test(vid)) {
-      if (document.documentElement.getAttribute('data-ytm-video-id') !== vid) {
+      if (typeof document !== 'undefined' && document.documentElement && document.documentElement.getAttribute('data-ytm-video-id') !== vid) {
         document.documentElement.setAttribute('data-ytm-video-id', vid);
       }
     }
     if (list && typeof list === 'string' && /^[a-zA-Z0-9_-]+$/.test(list)) {
-      if (document.documentElement.getAttribute('data-ytm-playlist-id') !== list) {
+      if (typeof document !== 'undefined' && document.documentElement && document.documentElement.getAttribute('data-ytm-playlist-id') !== list) {
         document.documentElement.setAttribute('data-ytm-playlist-id', list);
       }
-    } else {
+    } else if (typeof document !== 'undefined' && document.documentElement) {
       document.documentElement.removeAttribute('data-ytm-playlist-id');
     }
     if (typeof playlistIndex === 'number' && playlistIndex >= 0) {
-      document.documentElement.setAttribute('data-ytm-playlist-index', String(playlistIndex));
-    } else {
+      if (typeof document !== 'undefined' && document.documentElement) {
+        document.documentElement.setAttribute('data-ytm-playlist-index', String(playlistIndex));
+      }
+    } else if (typeof document !== 'undefined' && document.documentElement) {
       document.documentElement.removeAttribute('data-ytm-playlist-index');
     }
+
+    try {
+      const mediaData = getBridgeMediaData();
+      if (mediaData && mediaData.title && mediaData.artist) {
+        const mediaJson = JSON.stringify(mediaData);
+        if (mediaJson !== lastBroadcastMediaJson) {
+          lastBroadcastMediaJson = mediaJson;
+          if (typeof document !== 'undefined' && document.documentElement) {
+            document.documentElement.setAttribute('data-ytm-media-data', mediaJson);
+          }
+          if (typeof window !== 'undefined' && typeof window.postMessage === 'function') {
+            window.postMessage({
+              source: 'ytm-page-bridge-media',
+              mediaData
+            }, '*');
+          }
+        }
+      } else {
+        if (lastBroadcastMediaJson !== '') {
+          lastBroadcastMediaJson = '';
+          if (typeof document !== 'undefined' && document.documentElement) {
+            document.documentElement.removeAttribute('data-ytm-media-data');
+          }
+          if (typeof window !== 'undefined' && typeof window.postMessage === 'function') {
+            window.postMessage({
+              source: 'ytm-page-bridge-media',
+              mediaData: null
+            }, '*');
+          }
+        }
+      }
+    } catch (e) {}
 
     try {
       const upcoming = getUpcomingTracksFromQueue();
@@ -689,28 +806,32 @@
       if (upcomingJson !== lastBroadcastQueueJson || list !== lastBroadcastList) {
         lastBroadcastQueueJson = upcomingJson;
         lastBroadcastList = list;
-        window.postMessage({
-          source: 'ytm-page-bridge-queue',
-          upcomingTracks: upcoming,
-          playlistId: list,
-          playlistIndex: playlistIndex >= 0 ? playlistIndex : null
-        }, '*');
+        if (typeof window !== 'undefined' && typeof window.postMessage === 'function') {
+          window.postMessage({
+            source: 'ytm-page-bridge-queue',
+            upcomingTracks: upcoming,
+            playlistId: list,
+            playlistIndex: playlistIndex >= 0 ? playlistIndex : null
+          }, '*');
+        }
       }
     } catch (e) {}
   }
 
   function pollAdState() {
     updatePlayerBridgeData();
-    if (isListenerConnected) {
+    if (typeof isListenerConnected !== 'undefined' && isListenerConnected) {
       disableAutoplayForConnectedClient();
     }
     const isAd = checkIsAd();
     if (isAd !== isAdActive) {
       isAdActive = isAd;
-      document.documentElement.setAttribute('data-ytm-ad-active', isAd ? 'true' : 'false');
+      if (typeof document !== 'undefined' && document.documentElement) {
+        document.documentElement.setAttribute('data-ytm-ad-active', isAd ? 'true' : 'false');
+      }
     }
 
-    if (isAd) {
+    if (isAd && typeof document !== 'undefined' && typeof document.querySelector === 'function') {
       const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, button.ytp-ad-skip-button-text, .ytp-ad-skip-button-container button');
       if (skipBtn && skipBtn.offsetParent !== null) {
         try { skipBtn.click(); } catch (e) {}
@@ -718,19 +839,23 @@
     }
   }
 
-  updatePlayerBridgeData();
-  window.addEventListener('yt-navigate-finish', () => {
+  if (typeof document !== 'undefined') {
     updatePlayerBridgeData();
-  });
-
-  setInterval(pollAdState, 200);
+  }
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('yt-navigate-finish', () => {
+      updatePlayerBridgeData();
+    });
+    setInterval(pollAdState, 200);
+  }
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       formatUpcomingTrackItem,
       syncQueueProperly,
       executeNavigation,
-      checkIsAd
+      checkIsAd,
+      getBridgeMediaData
     };
   }
 })();

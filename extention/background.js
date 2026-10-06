@@ -26,6 +26,7 @@ let nativeHostVersion = null;
 let nativeHostVersionMismatch = false;
 let nativeHostInstalled = null;
 let isVerifyingInstall = false;
+let disableButtons = false;
 
 let currentSongActivity = null;
 let pausedTimestamp = null;
@@ -35,15 +36,17 @@ let activeSessionRole = 'NONE';
 let activeSessionRoomId = null;
 let activeSessionPeerCount = 0;
 
-chrome.storage.local.get({
+if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+  chrome.storage.local.get({
     userDisconnected: false,
     isPauseHidden: false,
     pausedTimestamp: null,
     pauseHideTargetTime: null,
     nativeHostInstalled: null,
     nativeHostVersion: null,
-    nativeHostVersionMismatch: false
-}, (res) => {
+    nativeHostVersionMismatch: false,
+    disableButtons: false
+  }, (res) => {
     userDisconnected = res.userDisconnected;
     isPauseHidden = res.isPauseHidden;
     pausedTimestamp = res.pausedTimestamp;
@@ -51,9 +54,64 @@ chrome.storage.local.get({
     nativeHostInstalled = res.nativeHostInstalled;
     if (res.nativeHostVersion) nativeHostVersion = res.nativeHostVersion;
     nativeHostVersionMismatch = res.nativeHostVersionMismatch;
-});
+    if (typeof res.disableButtons === 'boolean') disableButtons = res.disableButtons;
+  });
+}
 
-if (chrome.alarms) {
+if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') return;
+    if (changes.disableButtons !== undefined) {
+      disableButtons = Boolean(changes.disableButtons.newValue);
+      if (currentSongActivity && isRpcReady && port) {
+        if (!disableButtons && !currentSongActivity.buttons) {
+          const directOrSearchUrl = (currentSongActivity.videoId && /^[a-zA-Z0-9_-]{11}$/.test(currentSongActivity.videoId))
+            ? `https://music.youtube.com/watch?v=${currentSongActivity.videoId}`
+            : `https://music.youtube.com/search?q=${encodeURIComponent(`${currentSongActivity.state} ${currentSongActivity.details}`)}`;
+          currentSongActivity.buttons = (activeSessionRoomId && activeSessionRole === 'HOST') ? [
+            { label: "Listen Along", url: `https://fishyspop.github.io/Youtube-music-rich-presence/?ytm-session=${activeSessionRoomId}` },
+            { label: "Link", url: directOrSearchUrl }
+          ] : [
+            { label: "Link", url: directOrSearchUrl },
+            { label: "GitHub", url: "https://github.com/FishysPop/Youtube-music-rich-presence" }
+          ];
+        }
+        _sendSetActivityToNativeHost(currentSongActivity);
+      }
+    }
+    if (changes.pauseTimeoutMinutes !== undefined) {
+      if (pausedTimestamp !== null) {
+        if (pauseTimeoutId) {
+          clearTimeout(pauseTimeoutId);
+          pauseTimeoutId = null;
+        }
+        if (typeof chrome !== 'undefined' && chrome.alarms) {
+          chrome.alarms.clear('pauseHideAlarm');
+        }
+        const { targetTime, remainingMs, isExpired } = resolvePauseTargetTime(pausedTimestamp, changes.pauseTimeoutMinutes.newValue);
+        if (targetTime) {
+          pauseHideTargetTime = targetTime;
+          chrome.storage.local.set({ pauseHideTargetTime: targetTime });
+          if (isExpired) {
+            handlePauseHideTimeout();
+          } else {
+            if (typeof chrome !== 'undefined' && chrome.alarms) {
+              chrome.alarms.create('pauseHideAlarm', { when: targetTime });
+            }
+            pauseTimeoutId = setTimeout(() => {
+              handlePauseHideTimeout();
+            }, remainingMs);
+          }
+        } else {
+          pauseHideTargetTime = null;
+          chrome.storage.local.set({ pauseHideTargetTime: null });
+        }
+      }
+    }
+  });
+}
+
+if (typeof chrome !== 'undefined' && chrome.alarms) {
     chrome.alarms.onAlarm.addListener((alarm) => {
         if (alarm.name === 'pauseHideAlarm') {
             console.log('Background: Pause hide alarm triggered.');
@@ -66,7 +124,7 @@ if (chrome.alarms) {
 }
 
 function setupPeriodicAlarm() {
-    if (chrome.alarms) {
+    if (typeof chrome !== 'undefined' && chrome.alarms) {
         chrome.alarms.get('periodicCheckAlarm', (alarm) => {
             if (!alarm) {
                 chrome.alarms.create('periodicCheckAlarm', { periodInMinutes: 5 });
@@ -74,7 +132,9 @@ function setupPeriodicAlarm() {
         });
     }
 }
-setupPeriodicAlarm();
+if (typeof chrome !== 'undefined') {
+    setupPeriodicAlarm();
+}
 
 function handlePauseHideTimeout() {
     isPauseHidden = true;
@@ -223,8 +283,8 @@ function scheduleOutboundActivity() {
     }
 }
 
-function _sendSetActivityToNativeHost(activityData) {
-    if (!activityData) return;
+function sanitizeActivityData(activityData, shouldDisableButtons = false) {
+    if (!activityData) return null;
     const sanitizedData = { ...activityData };
     if (!sanitizedData.largeImageText) {
         delete sanitizedData.largeImageText;
@@ -232,10 +292,18 @@ function _sendSetActivityToNativeHost(activityData) {
     if (!sanitizedData.album) {
         delete sanitizedData.album;
     }
-    if (Array.isArray(sanitizedData.buttons) && sanitizedData.buttons.length > 2) {
+    if (shouldDisableButtons) {
+        delete sanitizedData.buttons;
+    } else if (Array.isArray(sanitizedData.buttons) && sanitizedData.buttons.length > 2) {
         console.warn(`[YTM RPC Background] Truncating ${sanitizedData.buttons.length} buttons to Discord's max of 2.`);
         sanitizedData.buttons = sanitizedData.buttons.slice(0, 2);
     }
+    return sanitizedData;
+}
+
+function _sendSetActivityToNativeHost(activityData) {
+    const sanitizedData = sanitizeActivityData(activityData, disableButtons);
+    if (!sanitizedData) return;
     queuedOutboundActivity = sanitizedData;
     scheduleOutboundActivity();
 }
@@ -563,6 +631,20 @@ function connectToNativeHost() {
   }
 }
 
+function resolvePauseTargetTime(pausedTimestamp, timeoutMinutes, now = Date.now()) {
+    const minutes = parseInt(timeoutMinutes, 10);
+    if (!pausedTimestamp || isNaN(minutes) || minutes <= 0) {
+        return { targetTime: null, remainingMs: null, isExpired: false };
+    }
+    const targetTime = pausedTimestamp + (minutes * 60 * 1000);
+    const remainingMs = targetTime - now;
+    return {
+        targetTime,
+        remainingMs,
+        isExpired: remainingMs <= 0
+    };
+}
+
 function getPauseTimeout() {
     return new Promise((resolve) => {
         chrome.storage.local.get({ pauseTimeoutMinutes: -1 }, (result) => {
@@ -781,20 +863,24 @@ function processNewActivity(message) {
                 clearTimeout(pauseTimeoutId);
                 pauseTimeoutId = null;
             }
-            if (chrome.alarms) {
+            if (typeof chrome !== 'undefined' && chrome.alarms) {
                 chrome.alarms.clear('pauseHideAlarm');
             }
             
-            if (timeoutMinutes > 0) {
-                const targetTime = Date.now() + (timeoutMinutes * 60 * 1000);
+            const { targetTime, remainingMs, isExpired } = resolvePauseTargetTime(pausedTimestamp, timeoutMinutes);
+            if (targetTime) {
                 pauseHideTargetTime = targetTime;
                 chrome.storage.local.set({ pausedTimestamp, pauseHideTargetTime: targetTime });
-                if (chrome.alarms) {
-                    chrome.alarms.create('pauseHideAlarm', { when: targetTime });
-                }
-                pauseTimeoutId = setTimeout(() => {
+                if (isExpired) {
                     handlePauseHideTimeout();
-                }, timeoutMinutes * 60 * 1000);
+                } else {
+                    if (typeof chrome !== 'undefined' && chrome.alarms) {
+                        chrome.alarms.create('pauseHideAlarm', { when: targetTime });
+                    }
+                    pauseTimeoutId = setTimeout(() => {
+                        handlePauseHideTimeout();
+                    }, remainingMs);
+                }
             } else {
                 chrome.storage.local.set({ pausedTimestamp, pauseHideTargetTime: null });
             }
@@ -843,6 +929,9 @@ function processNewActivity(message) {
         if (isRpcReady && port) {
             _sendSetActivityToNativeHost(pendingActivity);
         } else {
+            if (!userDisconnected) {
+                isManuallyDisconnected = false;
+            }
             if (!port && !connectRetryTimeout) {
                 connectToNativeHost();
             } else if (port && !isRpcReady && !connectRetryTimeout) {
@@ -934,6 +1023,10 @@ function processClearActivity(isPauseTimeout = false) {
           console.log('Background: Cleared connectRetryTimeout due to clear activity.');
       }
 
+      try {
+          _sendClearActivityToNativeHost();
+      } catch (e) {}
+
       port.onDisconnect.removeListener(onPortDisconnectHandler);
 
       try {
@@ -946,7 +1039,9 @@ function processClearActivity(isPauseTimeout = false) {
   }
 
   isRpcReady = false;
-  isManuallyDisconnected = true;
+  if (isPauseTimeout) {
+    isManuallyDisconnected = true;
+  }
   updateStatus('disconnected', isPauseTimeout ? 'Paused timeout active' : undefined, null, null, nativeHostVersion, nativeHostVersionMismatch);
 }
 
@@ -991,6 +1086,7 @@ function periodicConnectionCheck() {
 }
 
 
+if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && (message.type === 'FORWARD_LOG_BATCH' || message.type === 'FORWARD_LOG')) {
     const tabLabel = sender && sender.tab && sender.tab.id ? `[Tab ${sender.tab.id}]` : '[Content]';
@@ -1174,6 +1270,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   return false;
 });
+}
 
 function parseSessionInput(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') return null;
@@ -1289,7 +1386,7 @@ function handleGatewayJoinSession(roomId, senderTabId, sendResponse) {
   });
 }
 
-if (chrome.runtime.onMessageExternal) {
+if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessageExternal) {
   chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
     if (message && message.type === 'GATEWAY_JOIN_SESSION') {
       const senderTabId = sender && sender.tab ? sender.tab.id : null;
@@ -1322,7 +1419,7 @@ function isYouTubeMusicUrl(urlStr) {
   }
 }
 
-if (chrome.tabs && chrome.tabs.onCreated) {
+if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onCreated) {
   chrome.tabs.onCreated.addListener((tab) => {
     const targetUrl = tab.pendingUrl || tab.url;
     if (!targetUrl || !isGatewayUrl(targetUrl)) return;
@@ -1333,7 +1430,7 @@ if (chrome.tabs && chrome.tabs.onCreated) {
   });
 }
 
-if (chrome.tabs && chrome.tabs.onUpdated) {
+if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onUpdated) {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     const targetUrl = changeInfo.url || (changeInfo.status === 'loading' ? tab.url : null);
     if (!targetUrl) return;
@@ -1426,6 +1523,7 @@ function verifyNativeHostOnInstall() {
   connectToNativeHost();
 }
 
+if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onInstalled) {
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('Background: Extension installed or updated:', details.reason);
   currentActivity = null;
@@ -1440,27 +1538,35 @@ chrome.runtime.onInstalled.addListener((details) => {
   verifyNativeHostOnInstall();
   reInjectContentScripts(); 
 });
+}
 
+if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onStartup) {
 chrome.runtime.onStartup.addListener(() => {
   console.log('Background: Browser started.');
   currentActivity = null;
   pendingActivity = null;
   setupPeriodicAlarm();
-  chrome.storage.local.get({
-    userDisconnected: false,
-    isPauseHidden: false,
-    pausedTimestamp: null,
-    pauseHideTargetTime: null
-  }, (res) => {
-    userDisconnected = res.userDisconnected;
-    isPauseHidden = res.isPauseHidden;
-    pausedTimestamp = res.pausedTimestamp;
-    pauseHideTargetTime = res.pauseHideTargetTime;
-  });
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get({
+      userDisconnected: false,
+      isPauseHidden: false,
+      pausedTimestamp: null,
+      pauseHideTargetTime: null,
+      disableButtons: false
+    }, (res) => {
+      userDisconnected = res.userDisconnected;
+      isPauseHidden = res.isPauseHidden;
+      pausedTimestamp = res.pausedTimestamp;
+      pauseHideTargetTime = res.pauseHideTargetTime;
+      if (typeof res.disableButtons === 'boolean') disableButtons = res.disableButtons;
+    });
+  }
   reInjectContentScripts(); 
 });
+}
 
 function checkOpenYtmTabs() {
+  if (typeof chrome === 'undefined' || !chrome.tabs || !chrome.tabs.query) return;
   chrome.tabs.query({ url: "*://music.youtube.com/*" }, (tabs) => {
     if (chrome.runtime.lastError) return;
     if (!tabs || tabs.length === 0) {
@@ -1470,20 +1576,35 @@ function checkOpenYtmTabs() {
   });
 }
 
-chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
-  checkOpenYtmTabs();
-});
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url && !changeInfo.url.includes("music.youtube.com")) {
-    checkOpenYtmTabs();
+if (typeof chrome !== 'undefined' && chrome.tabs) {
+  if (chrome.tabs.onRemoved) {
+    chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+      checkOpenYtmTabs();
+    });
   }
-});
 
-setupPeriodicAlarm();
-reInjectContentScripts();
+  if (chrome.tabs.onUpdated) {
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+      if (changeInfo.url && !changeInfo.url.includes("music.youtube.com")) {
+        checkOpenYtmTabs();
+      }
+    });
+  }
+}
+
+if (typeof chrome !== 'undefined') {
+  setupPeriodicAlarm();
+  reInjectContentScripts();
+}
 
 if (periodicCheckIntervalId) {
     clearInterval(periodicCheckIntervalId);
 }
 console.log('Background: YouTube Music Rich Presence background script initialized.');
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        sanitizeActivityData,
+        resolvePauseTargetTime
+    };
+}

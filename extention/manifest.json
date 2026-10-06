@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Music Rich Presence",
-  "version": "2.0",
+  "version": "2.1",
   "description": "Displays your current YouTube Music activity on Discord and Listen along via a native helper application.",
   "icons": {
     "16": "icon.png",
