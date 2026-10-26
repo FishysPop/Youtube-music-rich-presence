@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Music Rich Presence",
-  "version": "2.1",
+  "version": "2.2",
   "description": "Displays your current YouTube Music activity on Discord and Listen along via a native helper application.",
   "icons": {
     "16": "icon.png",
@@ -31,23 +31,41 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://fishyspop.github.io/*"],
-      "js": ["gateway-interceptor.js"],
+      "matches": [
+        "https://fishyspop.github.io/*"
+      ],
+      "js": [
+        "gateway-interceptor.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://music.youtube.com/*"],
-      "js": ["early-url-capture.js"],
+      "matches": [
+        "https://music.youtube.com/*"
+      ],
+      "js": [
+        "early-url-capture.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://music.youtube.com/*"],
-      "js": ["log-forwarder.js", "webrtc-sync.js", "content.js"],
+      "matches": [
+        "https://music.youtube.com/*"
+      ],
+      "js": [
+        "log-forwarder.js",
+        "webrtc-sync.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://music.youtube.com/*"],
-      "js": ["page-bridge.js"],
+      "matches": [
+        "https://music.youtube.com/*"
+      ],
+      "js": [
+        "page-bridge.js"
+      ],
       "world": "MAIN",
       "run_at": "document_start"
     }
