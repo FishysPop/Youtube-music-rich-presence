@@ -31,31 +31,54 @@ let disableButtons = false;
 let currentSongActivity = null;
 let pausedTimestamp = null;
 let pauseTimeoutId = null;
+let pausedTrack = null;
 
 let activeSessionRole = 'NONE';
 let activeSessionRoomId = null;
 let activeSessionPeerCount = 0;
 
-if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-  chrome.storage.local.get({
-    userDisconnected: false,
-    isPauseHidden: false,
-    pausedTimestamp: null,
-    pauseHideTargetTime: null,
-    nativeHostInstalled: null,
-    nativeHostVersion: null,
-    nativeHostVersionMismatch: false,
-    disableButtons: false
-  }, (res) => {
-    userDisconnected = res.userDisconnected;
-    isPauseHidden = res.isPauseHidden;
-    pausedTimestamp = res.pausedTimestamp;
-    pauseHideTargetTime = res.pauseHideTargetTime;
-    nativeHostInstalled = res.nativeHostInstalled;
-    if (res.nativeHostVersion) nativeHostVersion = res.nativeHostVersion;
-    nativeHostVersionMismatch = res.nativeHostVersionMismatch;
-    if (typeof res.disableButtons === 'boolean') disableButtons = res.disableButtons;
-  });
+let storageInitPromise = null;
+
+function initStorageState() {
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    storageInitPromise = new Promise((resolve) => {
+      chrome.storage.local.get({
+        userDisconnected: false,
+        isPauseHidden: false,
+        pausedTimestamp: null,
+        pauseHideTargetTime: null,
+        isManuallyDisconnected: false,
+        currentSongActivity: null,
+        pausedTrack: null,
+        nativeHostInstalled: null,
+        nativeHostVersion: null,
+        nativeHostVersionMismatch: false,
+        disableButtons: false
+      }, (res) => {
+        userDisconnected = Boolean(res.userDisconnected);
+        isPauseHidden = Boolean(res.isPauseHidden);
+        pausedTimestamp = res.pausedTimestamp || null;
+        pauseHideTargetTime = res.pauseHideTargetTime || null;
+        isManuallyDisconnected = Boolean(res.isManuallyDisconnected);
+        currentSongActivity = res.currentSongActivity || null;
+        pausedTrack = res.pausedTrack || null;
+        nativeHostInstalled = res.nativeHostInstalled;
+        if (res.nativeHostVersion) nativeHostVersion = res.nativeHostVersion;
+        nativeHostVersionMismatch = Boolean(res.nativeHostVersionMismatch);
+        if (typeof res.disableButtons === 'boolean') disableButtons = res.disableButtons;
+        resolve(res);
+      });
+    });
+  } else {
+    storageInitPromise = Promise.resolve({});
+  }
+  return storageInitPromise;
+}
+
+initStorageState();
+
+function ensureStorageInitialized() {
+  return storageInitPromise || Promise.resolve({});
 }
 
 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
@@ -95,6 +118,15 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
           if (isExpired) {
             handlePauseHideTimeout();
           } else {
+            if (isPauseHidden) {
+              isPauseHidden = false;
+              pausedTrack = null;
+              isManuallyDisconnected = false;
+              chrome.storage.local.set({ isPauseHidden: false, pausedTrack: null, isManuallyDisconnected: false });
+              if (currentSongActivity && !userDisconnected) {
+                connectToNativeHost();
+              }
+            }
             if (typeof chrome !== 'undefined' && chrome.alarms) {
               chrome.alarms.create('pauseHideAlarm', { when: targetTime });
             }
@@ -105,6 +137,15 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
         } else {
           pauseHideTargetTime = null;
           chrome.storage.local.set({ pauseHideTargetTime: null });
+          if (isPauseHidden) {
+            isPauseHidden = false;
+            pausedTrack = null;
+            isManuallyDisconnected = false;
+            chrome.storage.local.set({ isPauseHidden: false, pausedTrack: null, isManuallyDisconnected: false });
+            if (currentSongActivity && !userDisconnected) {
+              connectToNativeHost();
+            }
+          }
         }
       }
     }
@@ -113,13 +154,15 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
 
 if (typeof chrome !== 'undefined' && chrome.alarms) {
     chrome.alarms.onAlarm.addListener((alarm) => {
-        if (alarm.name === 'pauseHideAlarm') {
-            console.log('Background: Pause hide alarm triggered.');
-            handlePauseHideTimeout();
-        } else if (alarm.name === 'periodicCheckAlarm') {
-            console.log('Background: Periodic check alarm triggered.');
-            periodicConnectionCheck();
-        }
+        ensureStorageInitialized().then(() => {
+            if (alarm.name === 'pauseHideAlarm') {
+                console.log('Background: Pause hide alarm triggered.');
+                handlePauseHideTimeout();
+            } else if (alarm.name === 'periodicCheckAlarm') {
+                console.log('Background: Periodic check alarm triggered.');
+                periodicConnectionCheck();
+            }
+        });
     });
 }
 
@@ -139,7 +182,19 @@ if (typeof chrome !== 'undefined') {
 function handlePauseHideTimeout() {
     isPauseHidden = true;
     pauseHideTargetTime = null;
-    chrome.storage.local.set({ isPauseHidden: true, pauseHideTargetTime: null });
+    isManuallyDisconnected = true;
+    const trackDetails = currentSongActivity ? currentSongActivity.details : (pausedTrack ? pausedTrack.track : null);
+    const trackArtist = currentSongActivity ? currentSongActivity.state : (pausedTrack ? pausedTrack.artist : null);
+    pausedTrack = { track: trackDetails, artist: trackArtist };
+
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({
+        isPauseHidden: true,
+        pauseHideTargetTime: null,
+        isManuallyDisconnected: true,
+        pausedTrack: pausedTrack
+      });
+    }
     processClearActivity(true);
 }
 /**
@@ -395,8 +450,8 @@ const onPortDisconnectHandler = () => {
 
     chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
         if (result.autoReconnectEnabled) {
-            if (isManuallyDisconnected) {
-                console.log('Background: Auto-reconnect skipped due to manual disconnect.');
+            if (isManuallyDisconnected || isPauseHidden) {
+                console.log('Background: Auto-reconnect skipped due to manual disconnect or pause hide.');
                 return;
             }
             if (!currentSongActivity && !pendingActivity) {
@@ -426,8 +481,8 @@ function connectToNativeHost() {
   }
   // This handles the case where we disconnected due to pause timeout, etc.
   // We don't want to auto-connect in this state, we want to wait for a trigger like a new song.
-  if (isManuallyDisconnected) {
-      console.log('Background: Not attempting to connect to native host due to a temporary disconnect (e.g., pause timeout).');
+  if (isManuallyDisconnected || isPauseHidden) {
+      console.log('Background: Not attempting to connect to native host due to a temporary disconnect or pause hide.');
       return;
   }
 
@@ -689,13 +744,27 @@ function isActualAlbum(track, album) {
     return true;
 }
 
+function isSameSongAsPausedOrHidden(message) {
+    if (!message || !message.track || !message.artist) return false;
+    if (currentSongActivity && currentSongActivity.details === message.track && currentSongActivity.state === message.artist) {
+        return true;
+    }
+    if (pausedTrack && pausedTrack.track === message.track && pausedTrack.artist === message.artist) {
+        return true;
+    }
+    return false;
+}
+
 function processNewActivity(message) {
     if (message.isPlaying) {
         if (isPauseHidden) {
             isPauseHidden = false;
-            chrome.storage.local.set({ isPauseHidden: false, pauseHideTargetTime: null });
+            pausedTrack = null;
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ isPauseHidden: false, pauseHideTargetTime: null, pausedTrack: null });
+            }
         }
-        if (chrome.alarms) {
+        if (typeof chrome !== 'undefined' && chrome.alarms) {
             chrome.alarms.clear('pauseHideAlarm');
         }
         if (pauseTimeoutId) {
@@ -704,9 +773,13 @@ function processNewActivity(message) {
         }
         if (isManuallyDisconnected && !userDisconnected) {
             isManuallyDisconnected = false;
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ isManuallyDisconnected: false });
+            }
         }
     } else {
-        if (isPauseHidden && currentSongActivity && currentSongActivity.details === message.track && currentSongActivity.state === message.artist) {
+        if (isPauseHidden && isSameSongAsPausedOrHidden(message)) {
+            console.log('Background: Track is still paused and pause hide timeout has already expired. Keeping hidden.');
             return;
         }
         if (pauseHideTargetTime && Date.now() >= pauseHideTargetTime && !isPauseHidden) {
@@ -774,8 +847,17 @@ function processNewActivity(message) {
         pausedTimestamp = null;
         pauseHideTargetTime = null;
         isPauseHidden = false;
-        chrome.storage.local.set({ pausedTimestamp: null, pauseHideTargetTime: null, isPauseHidden: false });
-        if (chrome.alarms) {
+        pausedTrack = null;
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.set({
+                pausedTimestamp: null,
+                pauseHideTargetTime: null,
+                isPauseHidden: false,
+                pausedTrack: null,
+                currentSongActivity
+            });
+        }
+        if (typeof chrome !== 'undefined' && chrome.alarms) {
             chrome.alarms.clear('pauseHideAlarm');
         }
         if (pauseTimeoutId) {
@@ -785,6 +867,9 @@ function processNewActivity(message) {
         
         if (isManuallyDisconnected && !userDisconnected) {
             isManuallyDisconnected = false;
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ isManuallyDisconnected: false });
+            }
             connectToNativeHost();
         }
     } else {
@@ -870,7 +955,9 @@ function processNewActivity(message) {
             const { targetTime, remainingMs, isExpired } = resolvePauseTargetTime(pausedTimestamp, timeoutMinutes);
             if (targetTime) {
                 pauseHideTargetTime = targetTime;
-                chrome.storage.local.set({ pausedTimestamp, pauseHideTargetTime: targetTime });
+                if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                    chrome.storage.local.set({ pausedTimestamp, pauseHideTargetTime: targetTime, currentSongActivity });
+                }
                 if (isExpired) {
                     handlePauseHideTimeout();
                 } else {
@@ -882,7 +969,9 @@ function processNewActivity(message) {
                     }, remainingMs);
                 }
             } else {
-                chrome.storage.local.set({ pausedTimestamp, pauseHideTargetTime: null });
+                if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                    chrome.storage.local.set({ pausedTimestamp, pauseHideTargetTime: null, currentSongActivity });
+                }
             }
         });
     } else if (message.isPlaying && pausedTimestamp !== null) {
@@ -891,7 +980,10 @@ function processNewActivity(message) {
         pausedTimestamp = null;
         pauseHideTargetTime = null;
         isPauseHidden = false;
-        chrome.storage.local.set({ pausedTimestamp: null, pauseHideTargetTime: null, isPauseHidden: false });
+        pausedTrack = null;
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.set({ pausedTimestamp: null, pauseHideTargetTime: null, isPauseHidden: false, pausedTrack: null, currentSongActivity });
+        }
         currentSongActivity.smallImageKey = currentSongActivity.repeatMode === 'ONE' ? 'repeat_one' : 'play';
         currentSongActivity.smallImageText = currentSongActivity.repeatMode === 'ONE' ? 'On Loop' : 'Playing';
         shouldUpdatePresence = true;
@@ -900,12 +992,15 @@ function processNewActivity(message) {
             clearTimeout(pauseTimeoutId);
             pauseTimeoutId = null;
         }
-        if (chrome.alarms) {
+        if (typeof chrome !== 'undefined' && chrome.alarms) {
             chrome.alarms.clear('pauseHideAlarm');
         }
         
         if (isManuallyDisconnected && !userDisconnected) {
             isManuallyDisconnected = false;
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ isManuallyDisconnected: false });
+            }
             connectToNativeHost();
         }
     }
@@ -923,6 +1018,9 @@ function processNewActivity(message) {
     }
 
     pendingActivity = currentSongActivity;
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && currentSongActivity) {
+        chrome.storage.local.set({ currentSongActivity });
+    }
     updateStatus(currentStatus, statusErrorMessage, currentRpcUser, pendingActivity, nativeHostVersion, nativeHostVersionMismatch);
 
     if (shouldUpdatePresence) {
@@ -1010,7 +1108,18 @@ function processClearActivity(isPauseTimeout = false) {
       pausedTimestamp = null;
       pauseHideTargetTime = null;
       isPauseHidden = false;
-      chrome.storage.local.set({ pausedTimestamp: null, pauseHideTargetTime: null, isPauseHidden: false });
+      pausedTrack = null;
+      isManuallyDisconnected = false;
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({
+          pausedTimestamp: null,
+          pauseHideTargetTime: null,
+          isPauseHidden: false,
+          currentSongActivity: null,
+          pausedTrack: null,
+          isManuallyDisconnected: false
+        });
+      }
       if (chrome.alarms) {
           chrome.alarms.clear('pauseHideAlarm');
       }
@@ -1041,48 +1150,56 @@ function processClearActivity(isPauseTimeout = false) {
   isRpcReady = false;
   if (isPauseTimeout) {
     isManuallyDisconnected = true;
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ isManuallyDisconnected: true });
+    }
   }
   updateStatus('disconnected', isPauseTimeout ? 'Paused timeout active' : undefined, null, null, nativeHostVersion, nativeHostVersionMismatch);
 }
 
 function periodicConnectionCheck() {
-    console.log(`Background (Periodic Check): Status: ${currentStatus}, Port: ${!!port}, RPC Ready: ${isRpcReady}, Retry Scheduled: ${!!connectRetryTimeout}, Manually Disconnected: ${isManuallyDisconnected}, PauseHidden: ${isPauseHidden}, UserDisconnected: ${userDisconnected}`);
+    ensureStorageInitialized().then(() => {
+        console.log(`Background (Periodic Check): Status: ${currentStatus}, Port: ${!!port}, RPC Ready: ${isRpcReady}, Retry Scheduled: ${!!connectRetryTimeout}, Manually Disconnected: ${isManuallyDisconnected}, PauseHidden: ${isPauseHidden}, UserDisconnected: ${userDisconnected}`);
 
-    if (userDisconnected || isPauseHidden || isManuallyDisconnected) {
-        console.log('Background (Periodic Check): Skipping periodic check due to manual disconnect or pause hide.');
-        return;
-    }
-
-    if (!currentSongActivity && !pendingActivity) {
-        console.log('Background (Periodic Check): Skipping periodic check because no song is playing.');
-        return;
-    }
-
-    if (port && !isRpcReady && currentStatus === 'native_connected') {
-        console.log('Background (Periodic Check): Native host connected, but RPC not ready. Attempting to reconnect RPC.');
-        reconnectDiscordRpcOnly();
-        return; 
-    }
-
-    if (!port && !connectRetryTimeout && (currentStatus === 'disconnected' || currentStatus === 'error' || currentStatus === 'native_connected')) {
-        console.log('Background (Periodic Check): Detected native host disconnected/error/rpc-not-ready state with no active port or retry.');
-        chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
-            if (result.autoReconnectEnabled) {
-                console.log('Background (Periodic Check): Auto-reconnect is ON. Attempting to connect to native host.');
-                connectToNativeHost();
-            } else {
-                console.log('Background: Auto-reconnect OFF. Not attempting connection via periodic check.');
-            }
-        });
-        return;
-    }
-
-    if (port && !isRpcReady && !connectRetryTimeout) {
-        if (currentStatus === 'rpc_ready') { 
-            console.warn('Background (Periodic Check): Inconsistent state - currentStatus is rpc_ready but isRpcReady is false. Attempting to reconnect RPC.');
-            reconnectDiscordRpcOnly();
+        if (userDisconnected || isPauseHidden || isManuallyDisconnected) {
+            console.log('Background (Periodic Check): Skipping periodic check due to manual disconnect or pause hide.');
+            return;
         }
-    }
+
+        if (!currentSongActivity && !pendingActivity) {
+            console.log('Background (Periodic Check): Skipping periodic check because no song is playing.');
+            return;
+        }
+
+        if (port && !isRpcReady && currentStatus === 'native_connected') {
+            console.log('Background (Periodic Check): Native host connected, but RPC not ready. Attempting to reconnect RPC.');
+            reconnectDiscordRpcOnly();
+            return; 
+        }
+
+        if (!port && !connectRetryTimeout && (currentStatus === 'disconnected' || currentStatus === 'error' || currentStatus === 'native_connected')) {
+            console.log('Background (Periodic Check): Detected native host disconnected/error/rpc-not-ready state with no active port or retry.');
+            chrome.storage.local.get({ autoReconnectEnabled: true }, (result) => {
+                if (result.autoReconnectEnabled) {
+                    if (userDisconnected || isPauseHidden || isManuallyDisconnected) {
+                        return;
+                    }
+                    console.log('Background (Periodic Check): Auto-reconnect is ON. Attempting to connect to native host.');
+                    connectToNativeHost();
+                } else {
+                    console.log('Background: Auto-reconnect OFF. Not attempting connection via periodic check.');
+                }
+            });
+            return;
+        }
+
+        if (port && !isRpcReady && !connectRetryTimeout) {
+            if (currentStatus === 'rpc_ready') { 
+                console.warn('Background (Periodic Check): Inconsistent state - currentStatus is rpc_ready but isRpcReady is false. Attempting to reconnect RPC.');
+                reconnectDiscordRpcOnly();
+            }
+        }
+    });
 }
 
 
@@ -1120,14 +1237,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!userDisconnected && message && message.isPlaying) {
         isManuallyDisconnected = false;
         isPauseHidden = false;
-        chrome.storage.local.set({ isPauseHidden: false });
+        pausedTrack = null;
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.set({ isPauseHidden: false, pausedTrack: null, isManuallyDisconnected: false });
+        }
     }
 
     if (message && message.track && message.artist) {
       if (activeSessionRoomId && activeSessionRole !== 'NONE') {
         console.log(`[YTM RPC Background] Activity update [Listen Together ${activeSessionRole} in ${activeSessionRoomId}]: "${message.track}" by "${message.artist}"`);
       }
-      processNewActivity(message);
+      ensureStorageInitialized().then(() => {
+        processNewActivity(message);
+      });
       if (sendResponse) sendResponse({ status: "Activity info processed by background" });
       return false; 
     } else if (message && message.type === 'NO_TRACK') {
@@ -1207,7 +1329,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       isManuallyDisconnected = false;
       userDisconnected = false;
       isPauseHidden = false;
-      chrome.storage.local.set({ userDisconnected: false, isPauseHidden: false, pauseHideTargetTime: null });
+      pausedTrack = null;
+      chrome.storage.local.set({ userDisconnected: false, isPauseHidden: false, pauseHideTargetTime: null, isManuallyDisconnected: false, pausedTrack: null });
       if (chrome.alarms) {
           chrome.alarms.clear('pauseHideAlarm');
       }
@@ -1251,7 +1374,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     isRpcReady = false;
     isManuallyDisconnected = true;
     userDisconnected = true;
-    chrome.storage.local.set({ userDisconnected: true });
+    chrome.storage.local.set({ userDisconnected: true, isManuallyDisconnected: true });
     if (!pendingActivity && currentActivity) {
         pendingActivity = currentActivity;
     }
@@ -1533,7 +1656,16 @@ chrome.runtime.onInstalled.addListener((details) => {
   isPauseHidden = false;
   currentSongActivity = null;
   pausedTimestamp = null;
-  chrome.storage.local.set({ userDisconnected: false, isPauseHidden: false, pausedTimestamp: null, pauseHideTargetTime: null });
+  pausedTrack = null;
+  chrome.storage.local.set({
+    userDisconnected: false,
+    isPauseHidden: false,
+    pausedTimestamp: null,
+    pauseHideTargetTime: null,
+    currentSongActivity: null,
+    pausedTrack: null,
+    isManuallyDisconnected: false
+  });
   setupPeriodicAlarm();
   verifyNativeHostOnInstall();
   reInjectContentScripts(); 
@@ -1546,21 +1678,7 @@ chrome.runtime.onStartup.addListener(() => {
   currentActivity = null;
   pendingActivity = null;
   setupPeriodicAlarm();
-  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-    chrome.storage.local.get({
-      userDisconnected: false,
-      isPauseHidden: false,
-      pausedTimestamp: null,
-      pauseHideTargetTime: null,
-      disableButtons: false
-    }, (res) => {
-      userDisconnected = res.userDisconnected;
-      isPauseHidden = res.isPauseHidden;
-      pausedTimestamp = res.pausedTimestamp;
-      pauseHideTargetTime = res.pauseHideTargetTime;
-      if (typeof res.disableButtons === 'boolean') disableButtons = res.disableButtons;
-    });
-  }
+  ensureStorageInitialized();
   reInjectContentScripts(); 
 });
 }
@@ -1594,7 +1712,6 @@ if (typeof chrome !== 'undefined' && chrome.tabs) {
 
 if (typeof chrome !== 'undefined') {
   setupPeriodicAlarm();
-  reInjectContentScripts();
 }
 
 if (periodicCheckIntervalId) {
@@ -1605,6 +1722,14 @@ console.log('Background: YouTube Music Rich Presence background script initializ
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         sanitizeActivityData,
-        resolvePauseTargetTime
+        resolvePauseTargetTime,
+        initStorageState,
+        ensureStorageInitialized,
+        handlePauseHideTimeout,
+        processClearActivity,
+        processNewActivity,
+        periodicConnectionCheck,
+        connectToNativeHost,
+        isSameSongAsPausedOrHidden
     };
 }
