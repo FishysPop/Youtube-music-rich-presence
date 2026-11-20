@@ -1712,7 +1712,7 @@ function renderListenTogetherGuideContent() {
       <div style="display:flex; align-items:center; gap:6px;">
         <span style="font-size:13px; font-weight:600; color:#ffffff;">Listen Together</span>
         <span style="background:rgba(255,255,255,0.2); color:#ffffff; font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:3px; letter-spacing:0.5px; text-transform:uppercase;">BETA</span>
-        <a href="https://github.com/FishysPop/Youtube-music-rich-presence/issues" target="_blank" rel="noopener noreferrer" style="color:rgba(255,255,255,0.7); font-size:11px; text-decoration:underline; cursor:pointer;" onmouseenter="this.style.color='#ffffff'" onmouseleave="this.style.color='rgba(255,255,255,0.7)'">Issues?</a>
+        <a id="ytm-guide-issues-link" href="https://github.com/FishysPop/Youtube-music-rich-presence/issues" target="_blank" rel="noopener noreferrer" style="color:rgba(255,255,255,0.7); font-size:11px; text-decoration:underline; cursor:pointer;">Issues?</a>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         <span style="background:rgba(255,255,255,0.18); font-size:10.5px; font-weight:600; padding:1px 6px; border-radius:10px; letter-spacing:0.5px; color:#ffffff;">${currentGuidePage} of 2</span>
@@ -1733,6 +1733,12 @@ function renderListenTogetherGuideContent() {
   `;
 
   positionListenTogetherGuide();
+
+  const issuesLink = document.getElementById('ytm-guide-issues-link');
+  if (issuesLink) {
+    issuesLink.onmouseenter = () => { issuesLink.style.color = '#ffffff'; };
+    issuesLink.onmouseleave = () => { issuesLink.style.color = 'rgba(255,255,255,0.7)'; };
+  }
 
   const closeBtn = document.getElementById('ytm-guide-close-btn');
   if (closeBtn) {

@@ -1,4 +1,7 @@
 function resolveTimeoutSelection(storedValue, presetValues) {
+  if (storedValue === "immediate") {
+    return { isCustom: false, selectValue: "immediate", customValue: null };
+  }
   const val = parseInt(storedValue, 10);
   if (isNaN(val) || val <= 0) {
     return { isCustom: false, selectValue: "0", customValue: null };
@@ -98,7 +101,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const presetValues = Array.from(selectEl.options)
       .map((opt) => opt.value)
-      .filter((val) => val !== "custom")
+      .filter((val) => val !== "custom" && val !== "immediate")
       .map((val) => parseInt(val, 10));
 
     chrome.storage.local.get({ [storageKey]: defaultValue }, (result) => {
@@ -125,6 +128,9 @@ document.addEventListener("DOMContentLoaded", () => {
           chrome.storage.local.set({ [storageKey]: customVal });
           customInputEl.focus();
         }
+      } else if (selectEl.value === "immediate") {
+        if (customContainerEl) customContainerEl.style.display = "none";
+        chrome.storage.local.set({ [storageKey]: "immediate" });
       } else {
         if (customContainerEl) customContainerEl.style.display = "none";
         const presetVal = parseInt(selectEl.value, 10);

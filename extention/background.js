@@ -32,6 +32,7 @@ let currentSongActivity = null;
 let pausedTimestamp = null;
 let pauseTimeoutId = null;
 let pausedTrack = null;
+let pauseTimeoutMinutes = -1;
 
 let activeSessionRole = 'NONE';
 let activeSessionRoomId = null;
@@ -53,7 +54,8 @@ function initStorageState() {
         nativeHostInstalled: null,
         nativeHostVersion: null,
         nativeHostVersionMismatch: false,
-        disableButtons: false
+        disableButtons: false,
+        pauseTimeoutMinutes: -1
       }, (res) => {
         userDisconnected = Boolean(res.userDisconnected);
         isPauseHidden = Boolean(res.isPauseHidden);
@@ -66,6 +68,7 @@ function initStorageState() {
         if (res.nativeHostVersion) nativeHostVersion = res.nativeHostVersion;
         nativeHostVersionMismatch = Boolean(res.nativeHostVersionMismatch);
         if (typeof res.disableButtons === 'boolean') disableButtons = res.disableButtons;
+        if (res.pauseTimeoutMinutes !== undefined) pauseTimeoutMinutes = res.pauseTimeoutMinutes;
         resolve(res);
       });
     });
@@ -103,6 +106,7 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
       }
     }
     if (changes.pauseTimeoutMinutes !== undefined) {
+      pauseTimeoutMinutes = changes.pauseTimeoutMinutes.newValue;
       if (pausedTimestamp !== null) {
         if (pauseTimeoutId) {
           clearTimeout(pauseTimeoutId);
@@ -687,8 +691,14 @@ function connectToNativeHost() {
 }
 
 function resolvePauseTargetTime(pausedTimestamp, timeoutMinutes, now = Date.now()) {
+    if (!pausedTimestamp) {
+        return { targetTime: null, remainingMs: null, isExpired: false };
+    }
+    if (timeoutMinutes === 'immediate') {
+        return { targetTime: pausedTimestamp, remainingMs: 0, isExpired: true };
+    }
     const minutes = parseInt(timeoutMinutes, 10);
-    if (!pausedTimestamp || isNaN(minutes) || minutes <= 0) {
+    if (isNaN(minutes) || minutes <= 0) {
         return { targetTime: null, remainingMs: null, isExpired: false };
     }
     const targetTime = pausedTimestamp + (minutes * 60 * 1000);
@@ -865,7 +875,7 @@ function processNewActivity(message) {
             pauseTimeoutId = null;
         }
         
-        if (isManuallyDisconnected && !userDisconnected) {
+        if (isManuallyDisconnected && !userDisconnected && (message.isPlaying || pauseTimeoutMinutes !== 'immediate')) {
             isManuallyDisconnected = false;
             if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
                 chrome.storage.local.set({ isManuallyDisconnected: false });
@@ -942,7 +952,23 @@ function processNewActivity(message) {
         currentSongActivity.smallImageKey = 'https://cdn.rcd.gg/PreMiD/resources/pause.png';
         currentSongActivity.smallImageText = 'Paused';
         shouldUpdatePresence = true;
-        
+
+        if (pauseTimeoutId) {
+            clearTimeout(pauseTimeoutId);
+            pauseTimeoutId = null;
+        }
+        if (typeof chrome !== 'undefined' && chrome.alarms) {
+            chrome.alarms.clear('pauseHideAlarm');
+        }
+
+        if (pauseTimeoutMinutes === 'immediate') {
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                chrome.storage.local.set({ pausedTimestamp, pauseHideTargetTime: null, currentSongActivity });
+            }
+            handlePauseHideTimeout();
+            return;
+        }
+
         getPauseTimeout().then((timeoutMinutes) => {
             if (pauseTimeoutId) {
                 clearTimeout(pauseTimeoutId);
