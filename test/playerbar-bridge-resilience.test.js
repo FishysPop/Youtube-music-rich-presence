@@ -398,4 +398,26 @@ test('resolvePauseTargetTime returns null targetTime when disabled or non-positi
   assert.deepStrictEqual(resolvePauseTargetTime(null, 10), { targetTime: null, remainingMs: null, isExpired: false });
 });
 
+test('resolveTimeoutSelection and resolvePauseTargetTime handle immediate pause hide option', () => {
+  const { resolveTimeoutSelection } = require('../extention/popup.js');
+  const { resolvePauseTargetTime } = require('../extention/background.js');
+  const presets = [0, 1, 5, 15, 30];
+
+  assert.deepStrictEqual(resolveTimeoutSelection('immediate', presets), {
+    isCustom: false,
+    selectValue: 'immediate',
+    customValue: null
+  });
+  assert.deepStrictEqual(resolvePauseTargetTime(1000000, 'immediate'), {
+    targetTime: 1000000,
+    remainingMs: 0,
+    isExpired: true
+  });
+  assert.deepStrictEqual(resolvePauseTargetTime(null, 'immediate'), {
+    targetTime: null,
+    remainingMs: null,
+    isExpired: false
+  });
+});
+
 runAllTests();
